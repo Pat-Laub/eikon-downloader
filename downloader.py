@@ -9,6 +9,7 @@ import threading
 # Packages required for the model/data-wrangling
 import dask.dataframe as dd
 import pandas as pd
+import datetime as dt
 
 # Setup for downloading Eikon data
 try:
@@ -32,14 +33,37 @@ except:
 	print("Exception when trying to connect to Eikon Data API")
 	EIKON_CONNECTION = False
 
-EIKON_DATA_FREQUENCIES = ('daily', 'hourly', 'minute', 'tick')
+EIKON_DATA_FREQUENCIES = ("daily", "hourly", "minute", "tick")
+EIKON_REQUEST_SIZES = {
+	"daily": "year",
+	"hourly": "month",
+	"minute": "day",
+	"tick": "minute"
+}
+
+# TODO: Make sure 'start' is at the beginning of the relevant period.
+# I.e. if getting daily batches of data, then make sure start is at midnight.
+def add_time_gap(start, gap):
+	if gap == "minute":
+		return (start + pd.Timedelta(minutes=1)).replace(second=0, microsecond=0)
+	elif gap == "day":
+		return (start + pd.Timedelta(days=1)).replace(second=0, minute=0, hour=0, microsecond=0)
+	elif gap == "month":
+		if start.month < 12:
+			return dt.date(start.year, start.month + 1, 1)
+		else:
+			return dt.date(start.year + 1, 1, 1)
+	elif gap == "year":
+		return dt.date(start.year + 1, 1, 1)
+
+	return end
 
 class Database(object):
 
 	def __init__(self, location):
 
 		self.location = location
-
+		self.rics = {}
 		self.dataFrames = {}
 		self.dateRanges = {}
 
@@ -57,7 +81,7 @@ class Database(object):
 
 		csv = os.path.join(path, "*.csv")
 		print(f"Loading {csv}")
-		df = dd.read_csv(csv)
+		df = dd.read_csv(csv, parse_dates=[0])
 		df = df.set_index("Date", sorted=True, divisions=dates)
 
 		self.dataFrames[freq] = df
@@ -76,6 +100,8 @@ class Database(object):
 		dateRange = {}
 
 		rics = sorted(list(set([col.split(" ")[0] for col in df.columns])))
+		self.rics[freq] = rics
+
 		for ric in rics:
 			ricCols = [col for col in df.columns if col.startswith(ric + ' ')]
 			dfRic = df[ricCols].dropna()
@@ -84,9 +110,9 @@ class Database(object):
 				firstObs = dfRic.head(1).index[0]
 				lastObs = dfRic.tail(1).index[0]
 			else:
-				# Convert to a pandas dataframe (slow!)
 				PRECISE = True
 				if PRECISE:
+					# Convert to a pandas dataframe (slow!)
 					dfRic = dfRic.compute()
 					firstObs = dfRic.index[0]
 					lastObs = dfRic.index[-1]
@@ -101,6 +127,37 @@ class Database(object):
 
 		self.dateRanges[freq] = dateRange
 		return self.dateRanges[freq]
+
+	def download_more_data(self, freq):
+
+		now = pd.to_datetime("now").replace(microsecond=0)
+
+		startDates = []
+		endDates = []
+
+		gap = EIKON_REQUEST_SIZES[freq]
+
+		ranges = self.dateRanges[freq]
+
+		lastObservations = [ranges[ric][1] for ric in self.rics[freq]]
+		start = min(lastObservations)
+
+		while start < now:
+			startDates.append(str(start))
+			end = add_time_gap(start, gap)
+			endDates.append(str(end))
+			start = end
+
+		for start, end in list(zip(startDates, endDates)):
+			print(f"Requesting {len(self.rics[freq])} RICS from {start} to {end}")
+			try:
+				if EIKON_CONNECTION:
+					df = ek.get_timeseries(self.rics[freq], start_date = str(start), end_date = str(end), interval="minute")
+					results.append(df)
+			except Exception:
+				print("Couldn't get that data range")
+				pass
+
 
 db = Database("/Users/plaub/Dropbox/Eikon/eikon-downloader/database")
 
@@ -120,7 +177,7 @@ class Window(ttk.Frame):
 		summaryFrame.pack(pady=10, fill=tk.BOTH, expand=1, padx=20)
 
 		footerFrame = self.footer_frame()
-		footerFrame.pack(fill=tk.X, expand=1)
+		footerFrame.pack(fill=tk.X)
 
 		self.pack(fill=tk.BOTH, expand=1)
 
@@ -172,7 +229,7 @@ class Window(ttk.Frame):
 		combobox = ttk.Combobox(eikonFrame, textvariable=self.frequency, width=8)
 		combobox['values'] = EIKON_DATA_FREQUENCIES
 		combobox['state'] = 'readonly'
-		combobox.current(0)
+		combobox.current(2)
 		combobox.pack(side="left")
 		combobox.bind("<<ComboboxSelected>>", self.async_update_table)
 
@@ -206,7 +263,7 @@ class Window(ttk.Frame):
 		self.time.pack()
 		self.update_clock()
 
-		updateDataButton = ttk.Button(footerFrame, text="Update data")
+		updateDataButton = ttk.Button(footerFrame, text="Update data", command=lambda: db.download_more_data(self.frequency.get()))
 		updateDataButton.pack(pady=10)
 
 		return footerFrame
