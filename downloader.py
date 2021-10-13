@@ -1,12 +1,92 @@
+
+# Packages required for the view/GUI
 import tkinter as tk
 import tkinter.filedialog
 from tkinter import ttk # New-style widgets
 import os
 
+# Packages required for the model/data-wrangling
+import dask.dataframe as dd
+import pandas as pd
 
-root = tk.Tk()
+EIKON_DATA_FREQUENCIES = ('daily', 'hourly', 'minute', 'tick')
+
+class Database(object):
+
+	def __init__(self, location):
+
+		self.location = location
+
+		self.dataFrames = {}
+		self.dateRanges = {}
+
+	def load_data_frame(self, freq):
+		path = os.path.join(self.location, "minute")
+		files = os.listdir(path)
+
+		dates = [name.split('.')[0] for name in sorted(files)]
+		dates = list(pd.to_datetime(dates))
+		dates.append(dates[-1] + pd.Timedelta(days=1))
+
+		csv = os.path.join(path, "*.csv")
+		print(f"Loading {csv}")
+		df = dd.read_csv(csv)
+		df = df.set_index("Date", sorted=True, divisions=dates)
+
+		self.dataFrames[freq] = df
+
+	def load_date_ranges(self, freq):
+
+		if freq in self.dateRanges:
+			return self.dateRanges[freq]
+
+		if freq not in self.dataFrames:
+			self.load_data_frame(freq)
+		df = self.dataFrames[freq]
+
+		dateRange = {}
+
+		rics = sorted(list(set([col.split(" ")[0] for col in df.columns])))
+		for ric in rics:
+			ricCols = [col for col in df.columns if col.startswith(ric + ' ')]
+			dfRic = df[ricCols].dropna()
+
+			if dfRic.head(1).shape[0] > 0 and dfRic.tail(1).shape[0] > 0:
+				firstObs = dfRic.head(1).index[0]
+				lastObs = dfRic.tail(1).index[0]
+			else:
+				# Convert to a pandas dataframe (slow!)
+				dfRic = dfRic.compute()
+				firstObs = dfRic.index[0]
+				lastObs = dfRic.index[-1]
+
+			dateRange[ric] = (firstObs, lastObs)
+			print(f"Ric {ric} observations from {firstObs} to {lastObs}")
+
+		self.dateRanges[freq] = dateRange
+		return self.dateRanges[freq]
+
+db = Database("/Users/plaub/Dropbox/Eikon/eikon-downloader/database")
 
 class Window(ttk.Frame):
+
+	def __init__(self, master=None):
+		ttk.Frame.__init__(self, master)
+		self.master = master
+
+		locFrame = self.db_location_frame()
+		locFrame.pack(pady=10, padx=10)
+
+		eikonFrame = self.eikon_and_frequency_frame()
+		eikonFrame.pack(pady=10)
+
+		summaryFrame = self.database_summary_frame()
+		summaryFrame.pack(pady=10, fill=tk.BOTH, expand=1, padx=20)
+
+		updateDataButton = ttk.Button(self, text="Update data")
+		updateDataButton.pack(pady=10)
+
+		self.pack(fill=tk.BOTH, expand=1)
 
 	def setup_db_location(self):
 		# Currently the 'askdirectory' dialog fails on MacOS beta
@@ -45,9 +125,9 @@ class Window(ttk.Frame):
 		frequencyLabel = ttk.Label(eikonFrame, text="Data frequency:")
 		frequencyLabel.pack(side="left", padx=10)
 
-		self.widget_var = tk.StringVar()
-		combobox = ttk.Combobox(eikonFrame, textvariable=self.widget_var, width=8)
-		combobox['values'] = ('daily', 'hourly', 'minute', 'tick')
+		self.frequency = tk.StringVar()
+		combobox = ttk.Combobox(eikonFrame, textvariable=self.frequency, width=8)
+		combobox['values'] = EIKON_DATA_FREQUENCIES
 		combobox['state'] = 'readonly'
 		combobox.current(0)
 		combobox.pack(side="left")
@@ -60,38 +140,35 @@ class Window(ttk.Frame):
 		databaseLabel = ttk.Label(summaryFrame, text="Database:")
 		databaseLabel.pack(side="top", pady=(0, 10))
 
-		table = ttk.Treeview(summaryFrame, column=("RIC", "Date Range"), show="headings")
+		loadButton = ttk.Button(summaryFrame, text="Load DB", command=self.update_table)
+		loadButton.pack(side="top")
 
-		table.column("# 1", anchor=tk.CENTER)
-		table.heading("# 1", text="RIC")
-		table.column("# 2", anchor=tk.CENTER)
-		table.heading("# 2", text="Date Range")
+		self.table = ttk.Treeview(summaryFrame, column=("RIC", "Date Range"), show="headings")
 
-		table.insert('', 'end', text="1", values=("AUD=", "1/1/10 to 2/2/20"))
-		table.insert('', 'end', text="1", values=("CAD=", "1/1/10 to 2/2/20"))
+		self.table.column("# 1", anchor=tk.CENTER)
+		self.table.heading("# 1", text="RIC")
+		self.table.column("# 2", anchor=tk.CENTER)
+		self.table.heading("# 2", text="Date Range")
 
-		table.pack()
+		self.table.pack(fill=tk.BOTH, expand=1)
 
 		return summaryFrame
 
-	def __init__(self, master=None):
-		ttk.Frame.__init__(self, master)
-		self.master = master
+	def update_table(self):
+		# Clear previous output
+		for i in self.table.get_children():
+			self.table.delete(i)
 
-		locFrame = self.db_location_frame()
-		locFrame.pack(pady=10, padx=10)
+		# Load up the range of data which is currently in the database at the current level of sampling frequency
+		freq = self.frequency.get()
+		print(f"Updating date range table for frequency {freq}")
 
-		eikonFrame = self.eikon_and_frequency_frame()
-		eikonFrame.pack(pady=10)
+		ranges = db.load_date_ranges(freq)
+		for ric in ranges:
+			self.table.insert('', 'end', text="1", values=(ric, f"{ranges[ric][0]} to {ranges[ric][1]}"))
 
-		summaryFrame = self.database_summary_frame()
-		summaryFrame.pack(pady=10)
-
-		updateDataButton = ttk.Button(self, text="Update data")
-		updateDataButton.pack(pady=10)
-
-		self.pack(fill=tk.BOTH, expand=1)
-
-app = Window(root)
-root.wm_title("Eikon Downloader")
-root.mainloop()
+if __name__ == "__main__":
+	root = tk.Tk()
+	app = Window(root)
+	root.wm_title("Eikon Downloader")
+	root.mainloop()
