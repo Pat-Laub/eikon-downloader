@@ -7,7 +7,9 @@ import os
 import threading
 
 # Packages required for the model/data-wrangling
-import dask.dataframe as dd
+USE_DASK = False
+if USE_DASK:
+	import dask.dataframe as dd
 import pandas as pd
 import datetime as dt
 
@@ -73,52 +75,88 @@ class Database(object):
 			print("No data for this particular sampling frequency; nothing to do")
 			return False
 
-		files = os.listdir(path)
+		files = sorted(os.listdir(path))
 
-		dates = [name.split('.')[0] for name in sorted(files)]
-		dates = list(pd.to_datetime(dates))
-		dates.append(dates[-1] + pd.Timedelta(days=1))
+		if USE_DASK:
+			dates = [name.split('.')[0] for name in files]
+			dates = list(pd.to_datetime(dates))
 
-		csv = os.path.join(path, "*.csv")
-		print(f"Loading {csv}")
-		df = dd.read_csv(csv, parse_dates=[0])
-		df = df.set_index("Date", sorted=True, divisions=dates)
+			dates.append(dates[-1] + pd.Timedelta(days=1))
 
-		self.dataFrames[freq] = df
+			csv = os.path.join(path, "*.csv")
+			print(f"Loading {csv}")
+			df = dd.read_csv(csv, parse_dates=[0])
+			df = df.set_index("Date", sorted=True, divisions=dates)
+
+			self.dataFrames[freq] = df
+
+		else:
+			dfs = []
+
+			for file in files:
+				csv = os.path.join(path, file)
+				print(f"Loading {csv}")
+				df = pd.read_csv(csv, parse_dates=[0], index_col=0)
+				dfs.append(df)
+
+			self.dataFrames[freq] = dfs
+
 		return True
 
 	def load_date_ranges(self, freq, addRange):
 
-		if freq in self.dateRanges:
+		if freq in self.dateRanges.keys():
 			return self.dateRanges[freq]
 
 		if freq not in self.dataFrames:
 			if not self.load_data_frame(freq):
 				return
+
 		df = self.dataFrames[freq]
+		dfs = self.dataFrames[freq]
 
 		dateRange = {}
 
-		rics = sorted(list(set([col.split(" ")[0] for col in df.columns])))
+		columns = df.columns if USE_DASK else dfs[-1].columns
+
+		rics = sorted(list(set([col.split(" ")[0] for col in columns])))
 		self.rics[freq] = rics
 
 		for ric in rics:
-			ricCols = [col for col in df.columns if col.startswith(ric + ' ')]
-			dfRic = df[ricCols].dropna()
+			ricCols = [col for col in columns if col.startswith(ric + ' ')]
 
-			if dfRic.head(1).shape[0] > 0 and dfRic.tail(1).shape[0] > 0:
-				firstObs = dfRic.head(1).index[0]
-				lastObs = dfRic.tail(1).index[0]
-			else:
-				PRECISE = True
-				if PRECISE:
-					# Convert to a pandas dataframe (slow!)
-					dfRic = dfRic.compute()
-					firstObs = dfRic.index[0]
-					lastObs = dfRic.index[-1]
+			if USE_DASK:
+				dfRic = df[ricCols].dropna()
+
+				if dfRic.head(1).shape[0] > 0 and dfRic.tail(1).shape[0] > 0:
+					firstObs = dfRic.head(1).index[0]
+					lastObs = dfRic.tail(1).index[0]
 				else:
-					firstObs = None
-					lastObs = None
+					PRECISE = True
+					if PRECISE:
+						# Convert to a pandas dataframe (slow!)
+						dfRic = dfRic.compute()
+						firstObs = dfRic.index[0]
+						lastObs = dfRic.index[-1]
+					else:
+						firstObs = None
+						lastObs = None
+
+			else:
+				firstObs = None
+				lastObs = None
+
+				for df in dfs:
+					dfRic = df[ricCols].dropna()
+					if dfRic.head(1).shape[0] > 0:
+						firstObs = dfRic.head(1).index[0]
+						break
+
+				for df in reversed(dfs):
+					dfRic = df[ricCols].dropna()
+					if dfRic.tail(1).shape[0] > 0:
+						lastObs = dfRic.tail(1).index[0]
+						break
 
 			dateRange[ric] = (firstObs, lastObs)
 			print(f"Ric {ric} observations from {firstObs} to {lastObs}")
@@ -231,9 +269,9 @@ class Window(ttk.Frame):
 		return locFrame
 
 	def update_clock(self):
-		now = pd.to_datetime("now").replace(microsecond=0)
+		now = pd.to_datetime("now").replace(second=0, microsecond=0)
 		self.time["text"] = "Time (UTC): " + str(now)
-		self.after(1000, self.update_clock)
+		self.after(60*1000, self.update_clock)
 
 	def eikon_and_frequency_frame(self):
 		eikonFrame = ttk.Frame(self)
