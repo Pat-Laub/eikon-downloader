@@ -153,10 +153,32 @@ class Database(object):
 			try:
 				if EIKON_CONNECTION:
 					df = ek.get_timeseries(self.rics[freq], start_date = str(start), end_date = str(end), interval="minute")
-					results.append(df)
+					self.save_chunk(freq, start, df)
 			except Exception:
 				print("Couldn't get that data range")
 				pass
+
+	def save_chunk(self, freq, start, df):
+		# TODO: Check if this potentially '@staticmethod' should be written as one.
+		gap = EIKON_REQUEST_SIZES[freq]
+
+		if gap == "minute":
+			start = start.replace(second=0, microsecond=0)
+			filename = f"{str(start).replace(':', '-')}.csv"
+		elif gap == "day":
+			filename = f"{start.date()}.csv"
+		elif gap == "month":
+			filename = f"{start.year}-{start.month}.csv"
+		elif gap == "year":
+			filename = f"{start.year}.csv"
+
+		path = os.path.join(freq, filename)
+
+		if os.path.exists(path):
+			print(f"Replacing {path} data")
+			os.remove(path)
+
+		df.to_csv(path)
 
 
 db = Database("/Users/plaub/Dropbox/Eikon/eikon-downloader/database")
