@@ -9,8 +9,8 @@ import threading
 # Packages required for the model/data-wrangling
 USE_DASK = False
 if USE_DASK:
-	import dask.dataframe as dd
-import pandas as pd
+	import dask.dataframe as dd # type: ignore
+import pandas as pd # type: ignore
 import datetime as dt
 
 # Setup for downloading Eikon data
@@ -21,7 +21,7 @@ try:
 	cfg.read('eikon.cfg')  # adjust for different file location
 	print(f"Eikon app id is {cfg['eikon']['app_id']}")
 
-	import eikon as ek
+	import eikon as ek # type: ignore
 
 	ek.set_app_key(cfg['eikon']['app_id'])
 	print("Connected to Eikon Data API!")
@@ -35,6 +35,8 @@ except:
 	print("Exception when trying to connect to Eikon Data API")
 	EIKON_CONNECTION = False
 
+from typing import Callable, Dict, List, Tuple
+
 EIKON_DATA_FREQUENCIES = ("daily", "hourly", "minute", "tick")
 EIKON_REQUEST_SIZES = {
 	"daily": "year",
@@ -45,7 +47,7 @@ EIKON_REQUEST_SIZES = {
 
 # TODO: Make sure 'start' is at the beginning of the relevant period.
 # I.e. if getting daily batches of data, then make sure start is at midnight.
-def add_time_gap(start, gap):
+def add_time_gap(start: pd.Timestamp, gap: str):
 	if gap == "minute":
 		return (start + pd.Timedelta(minutes=1)).replace(second=0, microsecond=0)
 	elif gap == "day":
@@ -58,18 +60,19 @@ def add_time_gap(start, gap):
 	elif gap == "year":
 		return dt.date(start.year + 1, 1, 1)
 
-	return end
-
 class Database(object):
 
-	def __init__(self, location):
+	def __init__(self, location: str):
+		self.location: str = location
+		self.rics: Dict[str, List[str]] = {}
+		if USE_DASK:
+			self.daskDataFrames: Dict[str, dd.DataFrame] = {}
+		else:
+			self.dataFrames: Dict[str, List[pd.DataFrame]] = {}
 
-		self.location = location
-		self.rics = {}
-		self.dataFrames = {}
-		self.dateRanges = {}
+		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {}
 
-	def load_data_frame(self, freq):
+	def load_data_frame(self, freq: str):
 		path = os.path.join(self.location, freq)
 		if not os.path.exists(path):
 			print("No data for this particular sampling frequency; nothing to do")
@@ -88,7 +91,7 @@ class Database(object):
 			df = dd.read_csv(csv, parse_dates=[0])
 			df = df.set_index("Date", sorted=True, divisions=dates)
 
-			self.dataFrames[freq] = df
+			self.daskDataFrames[freq] = df
 
 		else:
 			dfs = []
@@ -103,21 +106,24 @@ class Database(object):
 
 		return True
 
-	def load_date_ranges(self, freq, addRange):
+	def load_date_ranges(self, freq: str, addRange: Callable):
 
 		if freq in self.dateRanges.keys():
 			return self.dateRanges[freq]
 
-		if freq not in self.dataFrames:
+		dataAlreadyLoaded = freq in self.daskDataFrames if USE_DASK else freq in self.dataFrames
+		if not dataAlreadyLoaded:
 			if not self.load_data_frame(freq):
 				return
 
-		df = self.dataFrames[freq]
-		dfs = self.dataFrames[freq]
+		if USE_DASK:
+			df = self.daskDataFrames[freq]
+			columns = df.columns
+		else:
+			dfs = self.dataFrames[freq]
+			columns = dfs[-1].columns
 
 		dateRange = {}
-
-		columns = df.columns if USE_DASK else dfs[-1].columns
 
 		rics = sorted(list(set([col.split(" ")[0] for col in columns])))
 		self.rics[freq] = rics
@@ -166,7 +172,7 @@ class Database(object):
 		self.dateRanges[freq] = dateRange
 		return self.dateRanges[freq]
 
-	def download_more_data(self, freq):
+	def download_more_data(self, freq: str):
 
 		now = pd.to_datetime("now").replace(microsecond=0)
 
@@ -196,7 +202,7 @@ class Database(object):
 				print("Couldn't get that data range")
 				pass
 
-	def save_chunk(self, freq, start, df):
+	def save_chunk(self, freq: str, start: pd.Timestamp, df: pd.DataFrame):
 		# TODO: Check if this potentially '@staticmethod' should be written as one.
 		gap = EIKON_REQUEST_SIZES[freq]
 
@@ -223,20 +229,20 @@ db = Database("/Users/plaub/Dropbox/Eikon/eikon-downloader/database")
 
 class Window(ttk.Frame):
 
-	def __init__(self, master=None):
+	def __init__(self, master: tk.Tk):
 		ttk.Frame.__init__(self, master)
-		self.master = master
+		self.master: tk.Tk = master
 
-		locFrame = self.db_location_frame()
+		locFrame: ttk.Frame = self.db_location()
 		locFrame.pack(pady=10, padx=10)
 
-		eikonFrame = self.eikon_and_frequency_frame()
+		eikonFrame: ttk.Frame = self.eikon_and_frequency()
 		eikonFrame.pack(pady=10)
 
-		summaryFrame = self.database_summary_frame()
+		summaryFrame: ttk.Frame = self.database_summary()
 		summaryFrame.pack(pady=10, fill=tk.BOTH, expand=1, padx=20)
 
-		footerFrame = self.footer_frame()
+		footerFrame: ttk.Frame = self.footer()
 		footerFrame.pack(fill=tk.X)
 
 		self.pack(fill=tk.BOTH, expand=1)
@@ -245,23 +251,23 @@ class Window(ttk.Frame):
 
 	def setup_db_location(self):
 		# Currently the 'askdirectory' dialog fails on MacOS beta
-		x = tk.filedialog.askdirectory(initialdir=self.location.get())
+		x = tk.filedialog.askdirectory(initialdir=self.locationEntry.get())
 		print(x)
-		self.location.insert(0, x)
+		self.locationEntry.insert(0, x)
 
-	def db_location_frame(self):
+	def db_location(self) -> ttk.Frame:
 		locFrame = ttk.Frame(self)
 
 		locationLabel = ttk.Label(locFrame, text="Database location:")
 		locationLabel.pack(side="left")
 
-		self.location = ttk.Entry(locFrame, width=50)
-		self.location.pack(side="left", padx=10)
+		self.locationEntry = ttk.Entry(locFrame, width=50)
+		self.locationEntry.pack(side="left", padx=10)
 
 		defaultDBLocation = os.path.join(os.getcwd(), "database")
 		print(defaultDBLocation)
 
-		self.location.insert(0, defaultDBLocation)
+		self.locationEntry.insert(0, defaultDBLocation)
 
 		updateLocationButton = ttk.Button(locFrame, text="Change", command=self.setup_db_location)
 		updateLocationButton.pack(side="left")
@@ -273,7 +279,7 @@ class Window(ttk.Frame):
 		self.time["text"] = "Time (UTC): " + str(now)
 		self.after(60*1000, self.update_clock)
 
-	def eikon_and_frequency_frame(self):
+	def eikon_and_frequency(self) -> ttk.Frame:
 		eikonFrame = ttk.Frame(self)
 
 		connLabel = ttk.Label(eikonFrame, text="Eikon status: ")
@@ -295,13 +301,13 @@ class Window(ttk.Frame):
 
 		return eikonFrame
 
-	def database_summary_frame(self):
+	def database_summary(self) -> ttk.Frame:
 		summaryFrame = ttk.Frame(self)
 
 		databaseLabel = ttk.Label(summaryFrame, text="Database:")
 		databaseLabel.pack(side="top", pady=(0, 10))
 
-		self.table = ttk.Treeview(summaryFrame, column=("RIC", "Date Range"), show="headings")
+		self.table = ttk.Treeview(summaryFrame, columns=("RIC", "Date Range"), show="headings")
 
 		self.table.column("# 1", anchor=tk.CENTER, width=100, stretch=tk.NO)
 		self.table.heading("# 1", text="RIC")
@@ -316,7 +322,7 @@ class Window(ttk.Frame):
 
 		return summaryFrame
 
-	def footer_frame(self):
+	def footer(self) -> ttk.Frame:
 		footerFrame = ttk.Frame(self)
 
 		self.time = ttk.Label(footerFrame)
