@@ -35,6 +35,9 @@ except:
 
 from typing import Callable, Dict, List, Tuple
 
+# Valid frequencies/intervals for Eikon are:
+# 'tick', 'minute', 'hour', 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'.
+
 EIKON_DATA_FREQUENCIES = ("daily", "hourly", "minute", "tick")
 EIKON_REQUEST_SIZES = {
 	"daily": "year",
@@ -65,8 +68,8 @@ class Database(object):
 		self.status = status
 
 		self.rics: Dict[str, List[str]] = {freq: [] for freq in EIKON_DATA_FREQUENCIES}
-		self.dataFrames: Dict[str, Dict[str, pd.DataFrame]] = {}
-		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {}
+		self.dataFrames: Dict[str, Dict[str, pd.DataFrame]] = {freq: {} for freq in EIKON_DATA_FREQUENCIES}
+		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {freq: {} for freq in EIKON_DATA_FREQUENCIES}
 
 	def load_data_frame(self, freq: str):
 		path = os.path.join(self.location, freq)
@@ -79,7 +82,7 @@ class Database(object):
 		dfs = {}
 
 		for file in files:
-			if not file.endswith(".csv"):
+			if file.startswith(".") or not file.endswith(".csv"):
 				self.status(f"Skipping {file}")
 				continue
 
@@ -94,15 +97,20 @@ class Database(object):
 
 	def load_date_ranges(self, freq: str, addRange: Callable):
 
-		if freq in self.dateRanges.keys():
-			return self.dateRanges[freq]
+		# if freq in self.dateRanges.keys():
+		# 	return self.dateRanges[freq]
 
-		dataAlreadyLoaded = freq in self.dataFrames
-		if not dataAlreadyLoaded:
-			if not self.load_data_frame(freq):
-				return
+		# dataAlreadyLoaded = freq in self.dataFrames
+		# if not dataAlreadyLoaded:
+		# 	if not self.load_data_frame(freq):
+		# 		return
 
+		self.load_data_frame(freq)
 		dfs = self.dataFrames[freq]
+		if len(dfs) == 0:
+			self.status("No date ranges to load")
+			return
+
 		lastDF = dfs[sorted(dfs.keys())[-1]]
 		columns = lastDF.columns
 
@@ -167,8 +175,10 @@ class Database(object):
 		if not start:
 			if freq == "daily":
 				start = pd.to_datetime("1980")
-			else: 
+			elif freq == "minute":
 				start = now - pd.Timedelta(days=366)
+			elif freq == "tick":
+				start = now - pd.Timedelta(days=10)
 
 		
 		if len(newRics) > 0:
@@ -202,8 +212,7 @@ class Database(object):
 				#self.status(f"ricsInExistingDF = {ricsInExistingDF}")
 				ricsToDL = [ric for ric in self.rics[freq] if ric not in ricsInExistingDF]
 			else:
-				self.status(f"Filename {filename} not in the existing database!!!!!!!!!!")
-
+				#self.status(f"Filename {filename} not in the existing database")
 				ricsToDL = self.rics[freq]
 
 			if len(ricsToDL) > 0:
@@ -267,7 +276,11 @@ class Database(object):
 
 		if os.path.exists(path):
 			self.status(f"Replacing {path} data")
-			shutil.move(path, path.replace(".csv", "_prev.csv"))
+			backupPath = os.path.join(self.location, freq, "." + filename)
+			shutil.move(path, backupPath)
+
+		if os.path.exists(path):
+			self.status("ERROR: Should not get to here")
 
 		df.to_csv(path)
 
@@ -366,7 +379,7 @@ class Window(ttk.Frame):
 		self.addRicEntry = ttk.Entry(addRicFrame, width=10)
 		self.addRicEntry.pack(side="left", padx=10)
 
-		updateDataButton = ttk.Button(addRicFrame, text="Add", command=lambda: self.db.download_more_data(self.frequency.get(), self.addRicEntry.get()))
+		updateDataButton = ttk.Button(addRicFrame, text="Add", command=self.async_request_more_data)
 		updateDataButton.pack(side="left")
 
 		return addRicFrame
@@ -404,7 +417,7 @@ class Window(ttk.Frame):
 		self.time.pack()
 		self.update_clock()
 
-		updateDataButton = ttk.Button(footerFrame, text="Update data", command=lambda: self.db.download_more_data(self.frequency.get()))
+		updateDataButton = ttk.Button(footerFrame, text="Update data", command=self.async_request_more_data)
 		updateDataButton.pack(pady=10)
 
 		return footerFrame
@@ -428,6 +441,15 @@ class Window(ttk.Frame):
 	def async_update_table(self, ignoreEvent=None):
 		thread = threading.Thread(target=self.update_table)
 		thread.start()
+
+	def async_request_more_data(self, ignoreEvent=None):
+		def toRun():
+			self.db.download_more_data(self.frequency.get(), self.addRicEntry.get())
+			self.update_table()
+
+		thread = threading.Thread(target=toRun)
+		thread.start()
+
 
 
 if __name__ == "__main__":
