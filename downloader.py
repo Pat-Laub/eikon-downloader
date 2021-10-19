@@ -43,7 +43,7 @@ EIKON_REQUEST_SIZES = {
 	"daily": "year",
 	"hourly": "month",
 	"minute": "day",
-	"tick": "minute"
+	"tick": "hour"
 }
 
 # TODO: Make sure 'start' is at the beginning of the relevant period.
@@ -51,6 +51,8 @@ EIKON_REQUEST_SIZES = {
 def add_time_gap(start: pd.Timestamp, gap: str):
 	if gap == "minute":
 		return (start + pd.Timedelta(minutes=1)).replace(second=0, microsecond=0)
+	elif gap == "hour":
+		return (start + pd.Timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
 	elif gap == "day":
 		return (start + pd.Timedelta(days=1)).replace(second=0, minute=0, hour=0, microsecond=0)
 	elif gap == "month":
@@ -175,10 +177,10 @@ class Database(object):
 		if not start:
 			if freq == "daily":
 				start = pd.to_datetime("1980")
-			elif freq == "minute":
+			elif freq == "minute": 
 				start = now - pd.Timedelta(days=366)
 			elif freq == "tick":
-				start = now - pd.Timedelta(days=10)
+				start = now - pd.Timedelta(days=7)
 
 		
 		if len(newRics) > 0:
@@ -249,6 +251,9 @@ class Database(object):
 		if gap == "minute":
 			start = start.replace(second=0, microsecond=0)
 			filename = f"{str(start).replace(':', '-')}.csv"
+		elif gap == "hour":
+			start = start.replace(minute=0, second=0, microsecond=0)
+			filename = f"{str(start).replace(':', '-')}.csv"
 		elif gap == "day":
 			filename = f"{start.date()}.csv"
 		elif gap == "month":
@@ -265,9 +270,11 @@ class Database(object):
 		if type(df.columns) == pd.MultiIndex:
 			df.columns = [' '.join(col).strip() for col in df.columns.values]
 		else:
-			self.status(f"Expected type of columns as MultiIndex but got {type(df.columns)}")
-			self.status(f"DF name: {df.columns.name}")
-			df.columns = [f"{df.columns.name} {col}" for col in df.columns]
+			# The 'tick' data doesn't download multiple time series for each RIC.
+			if freq != "tick":
+				self.status(f"Expected type of columns as MultiIndex but got {type(df.columns)}")
+				self.status(f"DF name: {df.columns.name}")
+				df.columns = [f"{df.columns.name} {col}" for col in df.columns]
 
 		df = df[sorted(df.columns)]
 
