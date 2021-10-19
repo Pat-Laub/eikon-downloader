@@ -64,7 +64,7 @@ class Database(object):
 		self.location: str = location
 		self.status = status
 
-		self.rics: Dict[str, List[str]] = {}
+		self.rics: Dict[str, List[str]] = {freq: [] for freq in EIKON_DATA_FREQUENCIES}
 		self.dataFrames: Dict[str, Dict[str, pd.DataFrame]] = {}
 		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {}
 
@@ -119,7 +119,7 @@ class Database(object):
 
 			for name in sorted(dfs.keys()):
 				try:
-					dfRic = dfs[name][ricCols].dropna()
+					dfRic = dfs[name][ricCols].dropna(how="all")
 					if dfRic.head(1).shape[0] > 0:
 						firstObs = dfRic.head(1).index[0]
 						break
@@ -128,7 +128,7 @@ class Database(object):
 
 			for name in reversed(sorted(dfs.keys())):
 				try:
-					dfRic = dfs[name][ricCols].dropna()
+					dfRic = dfs[name][ricCols].dropna(how="all")
 					if dfRic.tail(1).shape[0] > 0:
 						lastObs = dfRic.tail(1).index[0]
 						break
@@ -142,7 +142,8 @@ class Database(object):
 		self.dateRanges[freq] = dateRange
 		return self.dateRanges[freq]
 
-	def download_more_data(self, freq: str):
+	def download_more_data(self, freq: str, newRics: str = ""):
+
 
 		now = pd.to_datetime("now").replace(microsecond=0)
 
@@ -151,10 +152,29 @@ class Database(object):
 
 		gap = EIKON_REQUEST_SIZES[freq]
 
-		ranges = self.dateRanges[freq]
+		newRics = newRics.strip()
 
-		lastObservations = [ranges[ric][1] for ric in self.rics[freq]]
-		start = min(lastObservations)
+		start = None
+
+		if len(newRics) == 0 and freq in self.dateRanges:
+			ranges = self.dateRanges[freq]
+
+			lastObservations = [ranges[ric][1] for ric in self.rics[freq]]
+
+			if len(lastObservations) > 0:
+				start = min(lastObservations)
+
+		if not start:
+			if freq == "daily":
+				start = pd.to_datetime("1980")
+			else: 
+				start = now - pd.Timedelta(days=366)
+
+		
+		if len(newRics) > 0:
+			for newRic in sorted(list(set(newRics.split(" ")))):
+				self.rics[freq].append(newRic)
+				self.status(f"Adding new RIC {newRic}")
 
 		while start < now:
 			startDates.append(start)
@@ -174,7 +194,7 @@ class Database(object):
 				ricsInExistingDF = []
 				for ric in ricColumnInExistingDF:
 					ricCols = [col for col in existingDF.columns if col.startswith(ric + ' ')]
-					ricDF = existingDF[ricCols].dropna()
+					ricDF = existingDF[ricCols].dropna(how="all")
 					#self.status(f"ricDF shape is {ricDF.shape} made from {len(ricCols)} cols")
 					if ricDF.shape[0] > 0:
 						ricsInExistingDF.append(ric)
@@ -187,18 +207,21 @@ class Database(object):
 				ricsToDL = self.rics[freq]
 
 			if len(ricsToDL) > 0:
-				if len(ricsToDL) < len(self.rics[freq]):
+				if len(ricsToDL) < len(self.rics[freq]) and len(newRics) == 0:
 					self.status(f"Not trying to fill in blanks in {filename}")
 					continue
 
-				self.status(f"Requesting {len(ricsToDL)} RICS to {filename}") # from {start} to {end}")
+				self.status(f"Requesting {len(ricsToDL)} RICS to {filename} from {start} to {end} at interval '{freq}'")
 			else:
 				self.status(f"Nothing to download for {filename}")
 				continue
 
 			if EIKON_CONNECTION:
 				try:
-					df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=str(end), interval="minute")
+					if end < now:
+						df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=str(end), interval=freq)
+					else:
+						df = ek.get_timeseries(ricsToDL, start_date=str(start), interval=freq)
 					self.status("Downloaded new data without exception")
 					try:
 						self.save_chunk(freq, filename, df)
@@ -208,6 +231,7 @@ class Database(object):
 
 				except Exception as e:
 					self.status(f"Couldn't download that data range: {e}")
+					self.status(f"Tried to run: ek.get_timeseries({ricsToDL}, start_date='{str(start)}', end_date='{str(end)}', interval='{freq}'')")
 
 	def date_to_filename(self, freq: str, start: pd.Timestamp) -> str:
 		# TODO: Check if this potentially '@staticmethod' should be written as one.
@@ -233,6 +257,8 @@ class Database(object):
 			df.columns = [' '.join(col).strip() for col in df.columns.values]
 		else:
 			self.status(f"Expected type of columns as MultiIndex but got {type(df.columns)}")
+			self.status(f"DF name: {df.columns.name}")
+			df.columns = [f"{df.columns.name} {col}" for col in df.columns]
 
 		df = df[sorted(df.columns)]
 
@@ -241,7 +267,6 @@ class Database(object):
 
 		if os.path.exists(path):
 			self.status(f"Replacing {path} data")
-			os.remove(path)
 			shutil.move(path, path.replace(".csv", "_prev.csv"))
 
 		df.to_csv(path)
@@ -326,7 +351,7 @@ class Window(ttk.Frame):
 		combobox = ttk.Combobox(eikonFrame, textvariable=self.frequency, width=8)
 		combobox['values'] = EIKON_DATA_FREQUENCIES
 		combobox['state'] = 'readonly'
-		combobox.current(2)
+		combobox.current(0)
 		combobox.pack(side="left")
 		combobox.bind("<<ComboboxSelected>>", self.async_update_table)
 
@@ -341,7 +366,7 @@ class Window(ttk.Frame):
 		self.addRicEntry = ttk.Entry(addRicFrame, width=10)
 		self.addRicEntry.pack(side="left", padx=10)
 
-		updateDataButton = ttk.Button(addRicFrame, text="Add", command=lambda: self.db.download_more_data(self.frequency.get()))
+		updateDataButton = ttk.Button(addRicFrame, text="Add", command=lambda: self.db.download_more_data(self.frequency.get(), self.addRicEntry.get()))
 		updateDataButton.pack(side="left")
 
 		return addRicFrame
