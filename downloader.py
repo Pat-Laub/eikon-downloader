@@ -3,15 +3,13 @@
 import tkinter as tk
 import tkinter.filedialog
 from tkinter import ttk # New-style widgets
-import os
+import os, shutil
 import threading
 
 # Packages required for the model/data-wrangling
-USE_DASK = False
-if USE_DASK:
-	import dask.dataframe as dd # type: ignore
 import pandas as pd # type: ignore
 import datetime as dt
+import platform
 
 # Setup for downloading Eikon data
 try:
@@ -62,47 +60,35 @@ def add_time_gap(start: pd.Timestamp, gap: str):
 
 class Database(object):
 
-	def __init__(self, location: str):
+	def __init__(self, location: str, status: Callable[[str], None]):
 		self.location: str = location
-		self.rics: Dict[str, List[str]] = {}
-		if USE_DASK:
-			self.daskDataFrames: Dict[str, dd.DataFrame] = {}
-		else:
-			self.dataFrames: Dict[str, List[pd.DataFrame]] = {}
+		self.status = status
 
+		self.rics: Dict[str, List[str]] = {}
+		self.dataFrames: Dict[str, Dict[str, pd.DataFrame]] = {}
 		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {}
 
 	def load_data_frame(self, freq: str):
 		path = os.path.join(self.location, freq)
 		if not os.path.exists(path):
-			print("No data for this particular sampling frequency; nothing to do")
+			self.status("No data for this particular sampling frequency; nothing to do")
 			return False
 
 		files = sorted(os.listdir(path))
 
-		if USE_DASK:
-			dates = [name.split('.')[0] for name in files]
-			dates = list(pd.to_datetime(dates))
+		dfs = {}
 
-			dates.append(dates[-1] + pd.Timedelta(days=1))
+		for file in files:
+			if not file.endswith(".csv"):
+				self.status(f"Skipping {file}")
+				continue
 
-			csv = os.path.join(path, "*.csv")
-			print(f"Loading {csv}")
-			df = dd.read_csv(csv, parse_dates=[0])
-			df = df.set_index("Date", sorted=True, divisions=dates)
+			csv = os.path.join(path, file)
+			self.status(f"Loading {file}")
+			df = pd.read_csv(csv, parse_dates=[0], index_col=0)
+			dfs[file] = df
 
-			self.daskDataFrames[freq] = df
-
-		else:
-			dfs = []
-
-			for file in files:
-				csv = os.path.join(path, file)
-				print(f"Loading {csv}")
-				df = pd.read_csv(csv, parse_dates=[0], index_col=0)
-				dfs.append(df)
-
-			self.dataFrames[freq] = dfs
+		self.dataFrames[freq] = dfs
 
 		return True
 
@@ -111,17 +97,14 @@ class Database(object):
 		if freq in self.dateRanges.keys():
 			return self.dateRanges[freq]
 
-		dataAlreadyLoaded = freq in self.daskDataFrames if USE_DASK else freq in self.dataFrames
+		dataAlreadyLoaded = freq in self.dataFrames
 		if not dataAlreadyLoaded:
 			if not self.load_data_frame(freq):
 				return
 
-		if USE_DASK:
-			df = self.daskDataFrames[freq]
-			columns = df.columns
-		else:
-			dfs = self.dataFrames[freq]
-			columns = dfs[-1].columns
+		dfs = self.dataFrames[freq]
+		lastDF = dfs[sorted(dfs.keys())[-1]]
+		columns = lastDF.columns
 
 		dateRange = {}
 
@@ -131,41 +114,28 @@ class Database(object):
 		for ric in rics:
 			ricCols = [col for col in columns if col.startswith(ric + ' ')]
 
-			if USE_DASK:
-				dfRic = df[ricCols].dropna()
+			firstObs = None
+			lastObs = None
 
-				if dfRic.head(1).shape[0] > 0 and dfRic.tail(1).shape[0] > 0:
-					firstObs = dfRic.head(1).index[0]
-					lastObs = dfRic.tail(1).index[0]
-				else:
-					PRECISE = True
-					if PRECISE:
-						# Convert to a pandas dataframe (slow!)
-						dfRic = dfRic.compute()
-						firstObs = dfRic.index[0]
-						lastObs = dfRic.index[-1]
-					else:
-						firstObs = None
-						lastObs = None
-
-			else:
-				firstObs = None
-				lastObs = None
-
-				for df in dfs:
-					dfRic = df[ricCols].dropna()
+			for name in sorted(dfs.keys()):
+				try:
+					dfRic = dfs[name][ricCols].dropna()
 					if dfRic.head(1).shape[0] > 0:
 						firstObs = dfRic.head(1).index[0]
 						break
+				except Exception:
+					pass
 
-				for df in reversed(dfs):
-					dfRic = df[ricCols].dropna()
+			for name in reversed(sorted(dfs.keys())):
+				try:
+					dfRic = dfs[name][ricCols].dropna()
 					if dfRic.tail(1).shape[0] > 0:
 						lastObs = dfRic.tail(1).index[0]
 						break
+				except Exception:
+					pass
 
 			dateRange[ric] = (firstObs, lastObs)
-			print(f"Ric {ric} observations from {firstObs} to {lastObs}")
 
 			addRange(ric, (firstObs, lastObs))
 
@@ -187,22 +157,59 @@ class Database(object):
 		start = min(lastObservations)
 
 		while start < now:
-			startDates.append(str(start))
+			startDates.append(start)
 			end = add_time_gap(start, gap)
-			endDates.append(str(end))
+			endDates.append(end)
 			start = end
 
 		for start, end in list(zip(startDates, endDates)):
-			print(f"Requesting {len(self.rics[freq])} RICS from {start} to {end}")
-			try:
-				if EIKON_CONNECTION:
-					df = ek.get_timeseries(self.rics[freq], start_date = str(start), end_date = str(end), interval="minute")
-					self.save_chunk(freq, start, df)
-			except Exception:
-				print("Couldn't get that data range")
-				pass
 
-	def save_chunk(self, freq: str, start: pd.Timestamp, df: pd.DataFrame):
+			filename = self.date_to_filename(freq, start)
+			if filename in self.dataFrames[freq].keys():
+				#self.status(f"Filename {filename} in the existing database")
+
+				existingDF = self.dataFrames[freq][filename]
+
+				ricColumnInExistingDF = sorted(list(set([col.split(" ")[0] for col in existingDF.columns])))
+				ricsInExistingDF = []
+				for ric in ricColumnInExistingDF:
+					ricCols = [col for col in existingDF.columns if col.startswith(ric + ' ')]
+					ricDF = existingDF[ricCols].dropna()
+					#self.status(f"ricDF shape is {ricDF.shape} made from {len(ricCols)} cols")
+					if ricDF.shape[0] > 0:
+						ricsInExistingDF.append(ric)
+
+				#self.status(f"ricsInExistingDF = {ricsInExistingDF}")
+				ricsToDL = [ric for ric in self.rics[freq] if ric not in ricsInExistingDF]
+			else:
+				self.status(f"Filename {filename} not in the existing database!!!!!!!!!!")
+
+				ricsToDL = self.rics[freq]
+
+			if len(ricsToDL) > 0:
+				if len(ricsToDL) < len(self.rics[freq]):
+					self.status(f"Not trying to fill in blanks in {filename}")
+					continue
+
+				self.status(f"Requesting {len(ricsToDL)} RICS to {filename}") # from {start} to {end}")
+			else:
+				self.status(f"Nothing to download for {filename}")
+				continue
+
+			if EIKON_CONNECTION:
+				try:
+					df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=str(end), interval="minute")
+					self.status("Downloaded new data without exception")
+					try:
+						self.save_chunk(freq, filename, df)
+						self.status("Saved new data without exception")
+					except Exception as e:
+						self.status(f"Couldn't save that data range: {e}")
+
+				except Exception as e:
+					self.status(f"Couldn't download that data range: {e}")
+
+	def date_to_filename(self, freq: str, start: pd.Timestamp) -> str:
 		# TODO: Check if this potentially '@staticmethod' should be written as one.
 		gap = EIKON_REQUEST_SIZES[freq]
 
@@ -216,16 +223,29 @@ class Database(object):
 		elif gap == "year":
 			filename = f"{start.year}.csv"
 
-		path = os.path.join(freq, filename)
+		return filename
+
+	def save_chunk(self, freq: str, filename: str, df: pd.DataFrame):
+		path = os.path.join(self.location, freq, filename)
+		self.status(f"Saving new data to {path}")
+
+		if type(df.columns) == pd.MultiIndex:
+			df.columns = [' '.join(col).strip() for col in df.columns.values]
+		else:
+			self.status(f"Expected type of columns as MultiIndex but got {type(df.columns)}")
+
+		df = df[sorted(df.columns)]
+
+		for col in df.columns:
+			df[col] = df[col].astype("Float64")
 
 		if os.path.exists(path):
-			print(f"Replacing {path} data")
+			self.status(f"Replacing {path} data")
 			os.remove(path)
+			shutil.move(path, path.replace(".csv", "_prev.csv"))
 
 		df.to_csv(path)
 
-
-db = Database("/Users/plaub/Dropbox/Eikon/eikon-downloader/database")
 
 class Window(ttk.Frame):
 
@@ -239,6 +259,9 @@ class Window(ttk.Frame):
 		eikonFrame: ttk.Frame = self.eikon_and_frequency()
 		eikonFrame.pack(pady=10)
 
+		addRicFrame: ttk.Frame = self.new_ric_entry()
+		addRicFrame.pack(pady=10)
+
 		summaryFrame: ttk.Frame = self.database_summary()
 		summaryFrame.pack(pady=10, fill=tk.BOTH, expand=1, padx=20)
 
@@ -247,13 +270,19 @@ class Window(ttk.Frame):
 
 		self.pack(fill=tk.BOTH, expand=1)
 
-		self.async_update_table()
 
 	def setup_db_location(self):
-		# Currently the 'askdirectory' dialog fails on MacOS beta
-		x = tk.filedialog.askdirectory(initialdir=self.locationEntry.get())
-		print(x)
-		self.locationEntry.insert(0, x)
+		# Currently the 'askdirectory' dialog fails on MacOS Monterey
+		if platform.system() != "Darwin":
+			dbPath = tk.filedialog.askdirectory(initialdir=self.locationEntry.get())
+		else:
+			dbPath = "/Users/plaub/Dropbox/Eikon/eikon-downloader/database"
+
+		self.update_status(f"Loading database at {dbPath}")
+		self.locationEntry.delete(0, tk.END)
+		self.locationEntry.insert(0, dbPath)
+		self.db = Database(dbPath, self.update_status)
+		self.async_update_table()
 
 	def db_location(self) -> ttk.Frame:
 		locFrame = ttk.Frame(self)
@@ -285,7 +314,9 @@ class Window(ttk.Frame):
 		connLabel = ttk.Label(eikonFrame, text="Eikon status: ")
 		connLabel.pack(side="left")
 
-		self.connStatus = ttk.Label(eikonFrame, text="Not connected", foreground="red")
+		connText = "Connected" if EIKON_CONNECTION else "Not connected"
+		connColor = "blue" if EIKON_CONNECTION else "red"
+		self.connStatus = ttk.Label(eikonFrame, text=connText, foreground=connColor)
 		self.connStatus.pack(side="left", padx=10)
 
 		frequencyLabel = ttk.Label(eikonFrame, text="Data frequency:")
@@ -301,11 +332,23 @@ class Window(ttk.Frame):
 
 		return eikonFrame
 
+	def new_ric_entry(self) -> ttk.Frame:
+
+		addRicFrame = ttk.Frame(self)
+		ricLabel = ttk.Label(addRicFrame, text="Add new RIC:")
+		ricLabel.pack(side="left")
+
+		self.addRicEntry = ttk.Entry(addRicFrame, width=10)
+		self.addRicEntry.pack(side="left", padx=10)
+
+		updateDataButton = ttk.Button(addRicFrame, text="Add", command=lambda: self.db.download_more_data(self.frequency.get()))
+		updateDataButton.pack(side="left")
+
+		return addRicFrame
+
+
 	def database_summary(self) -> ttk.Frame:
 		summaryFrame = ttk.Frame(self)
-
-		databaseLabel = ttk.Label(summaryFrame, text="Database:")
-		databaseLabel.pack(side="top", pady=(0, 10))
 
 		self.table = ttk.Treeview(summaryFrame, columns=("RIC", "Date Range"), show="headings")
 
@@ -322,14 +365,21 @@ class Window(ttk.Frame):
 
 		return summaryFrame
 
+	def update_status(self, message: str):
+		print(message)
+		self.status["text"] = "Status: " + message
+
 	def footer(self) -> ttk.Frame:
 		footerFrame = ttk.Frame(self)
+
+		self.status = ttk.Label(footerFrame, text="Status: ")
+		self.status.pack(pady=10)
 
 		self.time = ttk.Label(footerFrame)
 		self.time.pack()
 		self.update_clock()
 
-		updateDataButton = ttk.Button(footerFrame, text="Update data", command=lambda: db.download_more_data(self.frequency.get()))
+		updateDataButton = ttk.Button(footerFrame, text="Update data", command=lambda: self.db.download_more_data(self.frequency.get()))
 		updateDataButton.pack(pady=10)
 
 		return footerFrame
@@ -348,7 +398,7 @@ class Window(ttk.Frame):
 		freq = self.frequency.get()
 		print(f"Updating date range table for frequency {freq}")
 
-		db.load_date_ranges(freq, self.add_date_range)
+		self.db.load_date_ranges(freq, self.add_date_range)
 
 	def async_update_table(self, ignoreEvent=None):
 		thread = threading.Thread(target=self.update_table)
@@ -356,6 +406,7 @@ class Window(ttk.Frame):
 
 
 if __name__ == "__main__":
+
 	root = tk.Tk()
 	app = Window(root)
 	root.wm_title("Eikon Downloader")
