@@ -46,35 +46,21 @@ EIKON_REQUEST_SIZES = {
 	"tick": "hour"
 }
 
-# TODO: Make sure 'start' is at the beginning of the relevant period.
-# I.e. if getting daily batches of data, then make sure start is at midnight.
-def add_time_gap(start: pd.Timestamp, gap: str):
-	if gap == "minute":
-		return (start + pd.Timedelta(minutes=1)).replace(second=0, microsecond=0)
-	elif gap == "hour":
-		return (start + pd.Timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-	elif gap == "day":
-		return (start + pd.Timedelta(days=1)).replace(second=0, minute=0, hour=0, microsecond=0)
-	elif gap == "month":
-		if start.month < 12:
-			return dt.date(start.year, start.month + 1, 1)
-		else:
-			return dt.date(start.year + 1, 1, 1)
-	elif gap == "year":
-		return dt.date(start.year + 1, 1, 1)
+class FixedIntervalDatabase(object):
 
-class Database(object):
-
-	def __init__(self, location: str, status: Callable[[str], None]):
+	def __init__(self, location: str, interval: str, status: Callable[[str], None]):
 		self.location: str = location
+		self.interval: str = interval
 		self.status = status
 
-		self.rics: Dict[str, List[str]] = {interval: [] for interval in EIKON_DATA_INTERVALS}
-		self.dataFrames: Dict[str, Dict[str, pd.DataFrame]] = {interval: {} for interval in EIKON_DATA_INTERVALS}
-		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {interval: {} for interval in EIKON_DATA_INTERVALS}
+		self.gap = EIKON_REQUEST_SIZES[interval]
 
-	def load_data_frame(self, interval: str):
-		path = os.path.join(self.location, interval)
+		self.rics: List[str] = []
+		self.dataFrames: Dict[str, pd.DataFrame] = {}
+		self.dateRanges: Dict[str, Tuple[pd.Timedelta, pd.Timestamp]] = {}
+
+	def load_data_frame(self):
+		path = os.path.join(self.location, self.interval)
 		if not os.path.exists(path):
 			self.status("No data for this particular sampling interval; nothing to do")
 			return False
@@ -93,22 +79,14 @@ class Database(object):
 			df = pd.read_csv(csv, parse_dates=[0], index_col=0)
 			dfs[file] = df
 
-		self.dataFrames[interval] = dfs
+		self.dataFrames = dfs
 
 		return True
 
-	def load_date_ranges(self, interval: str, addRange: Callable):
+	def load_date_ranges(self, addRange: Callable):
 
-		# if interval in self.dateRanges.keys():
-		# 	return self.dateRanges[interval]
-
-		# dataAlreadyLoaded = interval in self.dataFrames
-		# if not dataAlreadyLoaded:
-		# 	if not self.load_data_frame(interval):
-		# 		return
-
-		self.load_data_frame(interval)
-		dfs = self.dataFrames[interval]
+		self.load_data_frame()
+		dfs = self.dataFrames
 		if len(dfs) == 0:
 			self.status("No date ranges to load")
 			return
@@ -119,7 +97,7 @@ class Database(object):
 		dateRange = {}
 
 		rics = sorted(list(set([col.split(" ")[0] for col in columns])))
-		self.rics[interval] = rics
+		self.rics = rics
 
 		for ric in rics:
 			ricCols = [col for col in columns if col.startswith(ric + ' ')]
@@ -149,58 +127,72 @@ class Database(object):
 
 			addRange(ric, (firstObs, lastObs))
 
-		self.dateRanges[interval] = dateRange
-		return self.dateRanges[interval]
+		self.dateRanges = dateRange
+		return self.dateRanges
 
-	def download_more_data(self, interval: str, newRics: str = ""):
+	# TODO: Make sure 'start' is at the beginning of the relevant period.
+	# I.e. if getting daily batches of data, then make sure start is at midnight.
+	def add_time_gap(self, start: pd.Timestamp):
+		if self.gap == "minute":
+			return (start + pd.Timedelta(minutes=1)).replace(second=0, microsecond=0)
+		elif self.gap == "hour":
+			return (start + pd.Timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+		elif self.gap == "day":
+			return (start + pd.Timedelta(days=1)).replace(second=0, minute=0, hour=0, microsecond=0)
+		elif self.gap == "month":
+			if start.month < 12:
+				return dt.date(start.year, start.month + 1, 1)
+			else:
+				return dt.date(start.year + 1, 1, 1)
+		elif self.gap == "year":
+			return dt.date(start.year + 1, 1, 1)
 
+	def download_more_data(self, newRics: str = ""):
 
 		now = pd.to_datetime("now").replace(microsecond=0)
 
 		startDates = []
 		endDates = []
 
-		gap = EIKON_REQUEST_SIZES[interval]
-
 		newRics = newRics.strip()
 
 		start = None
 
-		if len(newRics) == 0 and interval in self.dateRanges:
-			ranges = self.dateRanges[interval]
+		if len(newRics) == 0:
+			ranges = self.dateRanges
 
-			lastObservations = [ranges[ric][1] for ric in self.rics[interval]]
+			lastObservations = [ranges[ric][1] for ric in self.rics]
 
 			if len(lastObservations) > 0:
 				start = min(lastObservations)
 
 		if not start:
-			if interval == "daily":
+			if self.interval == "daily":
 				start = pd.to_datetime("1980")
-			elif interval == "minute":
+			elif self.interval == "minute":
 				start = now - pd.Timedelta(days=366)
-			elif interval == "tick":
+			elif self.interval == "tick":
 				start = now - pd.Timedelta(days=90)
 
 
 		if len(newRics) > 0:
 			for newRic in sorted(list(set(newRics.split(" ")))):
-				self.rics[interval].append(newRic)
+				self.rics.append(newRic)
 				self.status(f"Adding new RIC {newRic}")
 
 		while start < now:
 			startDates.append(start)
-			end = add_time_gap(start, gap)
+			end = self.add_time_gap(start)
 			endDates.append(end)
 			start = end
 
 		for start, end in list(zip(startDates, endDates)):
 
-			filename = self.date_to_filename(interval, start)
-			if filename in self.dataFrames[interval].keys():
+			filename = self.date_to_filename(start)
+			if filename in self.dataFrames.keys():
 				#self.status(f"Filename {filename} in the existing database")
 
-				existingDF = self.dataFrames[interval][filename]
+				existingDF = self.dataFrames[filename]
 
 				ricColumnInExistingDF = sorted(list(set([col.split(" ")[0] for col in existingDF.columns])))
 				ricsInExistingDF = []
@@ -212,17 +204,17 @@ class Database(object):
 						ricsInExistingDF.append(ric)
 
 				#self.status(f"ricsInExistingDF = {ricsInExistingDF}")
-				ricsToDL = [ric for ric in self.rics[interval] if ric not in ricsInExistingDF]
+				ricsToDL = [ric for ric in self.rics if ric not in ricsInExistingDF]
 			else:
 				#self.status(f"Filename {filename} not in the existing database")
-				ricsToDL = self.rics[interval]
+				ricsToDL = self.rics
 
 			if len(ricsToDL) > 0:
-				if len(ricsToDL) < len(self.rics[interval]) and len(newRics) == 0:
+				if len(ricsToDL) < len(self.rics) and len(newRics) == 0:
 					self.status(f"Not trying to fill in blanks in {filename}")
 					continue
 
-				self.status(f"Requesting {len(ricsToDL)} RICS to {filename} from {start} to {end} at interval '{interval}'")
+				self.status(f"Requesting {len(ricsToDL)} RICS to {filename} from {start} to {end} at interval '{self.interval}'")
 			else:
 				self.status(f"Nothing to download for {filename}")
 				continue
@@ -231,59 +223,56 @@ class Database(object):
 
 				endDate = str(end) if end < now else None
 
-				if interval != "tick":
+				if self.interval != "tick":
 					try:
-						df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=endDate, interval=interval)
+						df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=endDate, interval=self.interval)
 						self.status("Downloaded new data without exception")
 						try:
-							self.save_chunk(interval, filename, df)
+							self.save_chunk(filename, df)
 							self.status("Saved new data without exception")
 						except Exception as e:
 							self.status(f"Couldn't save that data range: {e}")
 
 					except Exception as e:
 						self.status(f"Couldn't download that data range: {e}")
-						self.status(f"Tried to run: ek.get_timeseries({ricsToDL}, start_date='{str(start)}', end_date='{str(end)}', interval='{interval}'')")
+						self.status(f"Tried to run: ek.get_timeseries({ricsToDL}, start_date='{str(start)}', end_date='{str(end)}', interval='{self.interval}'')")
 
 				else:
 
 					for ric in ricsToDL:
 						try:
-							dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=interval)
+							dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=self.interval)
 							self.status(f"Downloaded new data for {ric} without exception")
 
 							try:
 								ricFilename = os.path.join(ric.replace('.', '-'), filename)
-								self.save_chunk(interval, ricFilename, dfRic)
+								self.save_chunk(ricFilename, dfRic)
 								self.status("Saved new data without exception")
 							except Exception as e:
 								self.status(f"Couldn't save that data range: {e}")
 
 						except Exception as e:
 							self.status(f"Couldn't download that data range: {e}")
-							self.status(f"Tried to run: ek.get_timeseries('{ric}', start_date='{str(start)}', end_date='{str(end)}', interval='{interval}'')")
+							self.status(f"Tried to run: ek.get_timeseries('{ric}', start_date='{str(start)}', end_date='{str(end)}', interval='{self.interval}'')")
 
-	def date_to_filename(self, interval: str, start: pd.Timestamp) -> str:
-		# TODO: Check if this potentially '@staticmethod' should be written as one.
-		gap = EIKON_REQUEST_SIZES[interval]
-
-		if gap == "minute":
+	def date_to_filename(self, start: pd.Timestamp) -> str:
+		if self.gap == "minute":
 			start = start.replace(second=0, microsecond=0)
 			filename = f"{str(start).replace(':', '-')}.csv"
-		elif gap == "hour":
+		elif self.gap == "hour":
 			start = start.replace(minute=0, second=0, microsecond=0)
 			filename = f"{str(start).replace(':', '-')}.csv"
-		elif gap == "day":
+		elif self.gap == "day":
 			filename = f"{start.date()}.csv"
-		elif gap == "month":
+		elif self.gap == "month":
 			filename = f"{start.year}-{start.month}.csv"
-		elif gap == "year":
+		elif self.gap == "year":
 			filename = f"{start.year}.csv"
 
 		return filename
 
-	def save_chunk(self, interval: str, filename: str, df: pd.DataFrame):
-		path = os.path.join(self.location, interval, filename)
+	def save_chunk(self, filename: str, df: pd.DataFrame):
+		path = os.path.join(self.location, self.interval, filename)
 		self.status(f"Saving new data to {path}")
 
 		# Make sure the folders exist for this file to be saved
@@ -346,7 +335,7 @@ class Window(ttk.Frame):
 		self.update_status(f"Loading database at {dbPath}")
 		self.locationEntry.delete(0, tk.END)
 		self.locationEntry.insert(0, dbPath)
-		self.db = Database(dbPath, self.update_status)
+		self.db = FixedIntervalDatabase(self.locationEntry.get(), self.interval.get(), self.update_status)
 		self.async_update_table()
 
 	def db_location(self) -> ttk.Frame:
@@ -463,15 +452,19 @@ class Window(ttk.Frame):
 		interval = self.interval.get()
 		print(f"Updating date range table for interval {interval}")
 
-		self.db.load_date_ranges(interval, self.add_date_range)
+		self.db.load_date_ranges(self.add_date_range)
 
 	def async_update_table(self, ignoreEvent=None):
-		thread = threading.Thread(target=self.update_table)
+		def toRun():
+			self.db = FixedIntervalDatabase(self.locationEntry.get(), self.interval.get(), self.update_status)
+			self.update_table()
+
+		thread = threading.Thread(target=toRun)
 		thread.start()
 
 	def async_request_more_data(self, ignoreEvent=None):
 		def toRun():
-			self.db.download_more_data(self.interval.get(), self.addRicEntry.get())
+			self.db.download_more_data(self.addRicEntry.get())
 			self.update_table()
 
 		thread = threading.Thread(target=toRun)
