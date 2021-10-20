@@ -35,10 +35,10 @@ except Exception as e:
 
 from typing import Callable, Dict, List, Tuple
 
-# Valid frequencies/intervals for Eikon are:
+# Valid intervals for Eikon are:
 # 'tick', 'minute', 'hour', 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'.
 
-EIKON_DATA_FREQUENCIES = ("daily", "hourly", "minute", "tick")
+EIKON_DATA_INTERVALS = ("daily", "hourly", "minute", "tick")
 EIKON_REQUEST_SIZES = {
 	"daily": "year",
 	"hourly": "month",
@@ -69,14 +69,14 @@ class Database(object):
 		self.location: str = location
 		self.status = status
 
-		self.rics: Dict[str, List[str]] = {freq: [] for freq in EIKON_DATA_FREQUENCIES}
-		self.dataFrames: Dict[str, Dict[str, pd.DataFrame]] = {freq: {} for freq in EIKON_DATA_FREQUENCIES}
-		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {freq: {} for freq in EIKON_DATA_FREQUENCIES}
+		self.rics: Dict[str, List[str]] = {interval: [] for interval in EIKON_DATA_INTERVALS}
+		self.dataFrames: Dict[str, Dict[str, pd.DataFrame]] = {interval: {} for interval in EIKON_DATA_INTERVALS}
+		self.dateRanges: Dict[str, Dict[str, Tuple[pd.Timedelta, pd.Timestamp]]] = {interval: {} for interval in EIKON_DATA_INTERVALS}
 
-	def load_data_frame(self, freq: str):
-		path = os.path.join(self.location, freq)
+	def load_data_frame(self, interval: str):
+		path = os.path.join(self.location, interval)
 		if not os.path.exists(path):
-			self.status("No data for this particular sampling frequency; nothing to do")
+			self.status("No data for this particular sampling interval; nothing to do")
 			return False
 
 		files = sorted(os.listdir(path))
@@ -93,22 +93,22 @@ class Database(object):
 			df = pd.read_csv(csv, parse_dates=[0], index_col=0)
 			dfs[file] = df
 
-		self.dataFrames[freq] = dfs
+		self.dataFrames[interval] = dfs
 
 		return True
 
-	def load_date_ranges(self, freq: str, addRange: Callable):
+	def load_date_ranges(self, interval: str, addRange: Callable):
 
-		# if freq in self.dateRanges.keys():
-		# 	return self.dateRanges[freq]
+		# if interval in self.dateRanges.keys():
+		# 	return self.dateRanges[interval]
 
-		# dataAlreadyLoaded = freq in self.dataFrames
+		# dataAlreadyLoaded = interval in self.dataFrames
 		# if not dataAlreadyLoaded:
-		# 	if not self.load_data_frame(freq):
+		# 	if not self.load_data_frame(interval):
 		# 		return
 
-		self.load_data_frame(freq)
-		dfs = self.dataFrames[freq]
+		self.load_data_frame(interval)
+		dfs = self.dataFrames[interval]
 		if len(dfs) == 0:
 			self.status("No date ranges to load")
 			return
@@ -119,7 +119,7 @@ class Database(object):
 		dateRange = {}
 
 		rics = sorted(list(set([col.split(" ")[0] for col in columns])))
-		self.rics[freq] = rics
+		self.rics[interval] = rics
 
 		for ric in rics:
 			ricCols = [col for col in columns if col.startswith(ric + ' ')]
@@ -149,10 +149,10 @@ class Database(object):
 
 			addRange(ric, (firstObs, lastObs))
 
-		self.dateRanges[freq] = dateRange
-		return self.dateRanges[freq]
+		self.dateRanges[interval] = dateRange
+		return self.dateRanges[interval]
 
-	def download_more_data(self, freq: str, newRics: str = ""):
+	def download_more_data(self, interval: str, newRics: str = ""):
 
 
 		now = pd.to_datetime("now").replace(microsecond=0)
@@ -160,32 +160,32 @@ class Database(object):
 		startDates = []
 		endDates = []
 
-		gap = EIKON_REQUEST_SIZES[freq]
+		gap = EIKON_REQUEST_SIZES[interval]
 
 		newRics = newRics.strip()
 
 		start = None
 
-		if len(newRics) == 0 and freq in self.dateRanges:
-			ranges = self.dateRanges[freq]
+		if len(newRics) == 0 and interval in self.dateRanges:
+			ranges = self.dateRanges[interval]
 
-			lastObservations = [ranges[ric][1] for ric in self.rics[freq]]
+			lastObservations = [ranges[ric][1] for ric in self.rics[interval]]
 
 			if len(lastObservations) > 0:
 				start = min(lastObservations)
 
 		if not start:
-			if freq == "daily":
+			if interval == "daily":
 				start = pd.to_datetime("1980")
-			elif freq == "minute": 
+			elif interval == "minute":
 				start = now - pd.Timedelta(days=366)
-			elif freq == "tick":
+			elif interval == "tick":
 				start = now - pd.Timedelta(days=90)
 
-		
+
 		if len(newRics) > 0:
 			for newRic in sorted(list(set(newRics.split(" ")))):
-				self.rics[freq].append(newRic)
+				self.rics[interval].append(newRic)
 				self.status(f"Adding new RIC {newRic}")
 
 		while start < now:
@@ -196,11 +196,11 @@ class Database(object):
 
 		for start, end in list(zip(startDates, endDates)):
 
-			filename = self.date_to_filename(freq, start)
-			if filename in self.dataFrames[freq].keys():
+			filename = self.date_to_filename(interval, start)
+			if filename in self.dataFrames[interval].keys():
 				#self.status(f"Filename {filename} in the existing database")
 
-				existingDF = self.dataFrames[freq][filename]
+				existingDF = self.dataFrames[interval][filename]
 
 				ricColumnInExistingDF = sorted(list(set([col.split(" ")[0] for col in existingDF.columns])))
 				ricsInExistingDF = []
@@ -212,17 +212,17 @@ class Database(object):
 						ricsInExistingDF.append(ric)
 
 				#self.status(f"ricsInExistingDF = {ricsInExistingDF}")
-				ricsToDL = [ric for ric in self.rics[freq] if ric not in ricsInExistingDF]
+				ricsToDL = [ric for ric in self.rics[interval] if ric not in ricsInExistingDF]
 			else:
 				#self.status(f"Filename {filename} not in the existing database")
-				ricsToDL = self.rics[freq]
+				ricsToDL = self.rics[interval]
 
 			if len(ricsToDL) > 0:
-				if len(ricsToDL) < len(self.rics[freq]) and len(newRics) == 0:
+				if len(ricsToDL) < len(self.rics[interval]) and len(newRics) == 0:
 					self.status(f"Not trying to fill in blanks in {filename}")
 					continue
 
-				self.status(f"Requesting {len(ricsToDL)} RICS to {filename} from {start} to {end} at interval '{freq}'")
+				self.status(f"Requesting {len(ricsToDL)} RICS to {filename} from {start} to {end} at interval '{interval}'")
 			else:
 				self.status(f"Nothing to download for {filename}")
 				continue
@@ -231,41 +231,41 @@ class Database(object):
 
 				endDate = str(end) if end < now else None
 
-				if freq != "tick":
+				if interval != "tick":
 					try:
-						df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=endDate, interval=freq)
+						df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=endDate, interval=interval)
 						self.status("Downloaded new data without exception")
 						try:
-							self.save_chunk(freq, filename, df)
+							self.save_chunk(interval, filename, df)
 							self.status("Saved new data without exception")
 						except Exception as e:
 							self.status(f"Couldn't save that data range: {e}")
 
 					except Exception as e:
 						self.status(f"Couldn't download that data range: {e}")
-						self.status(f"Tried to run: ek.get_timeseries({ricsToDL}, start_date='{str(start)}', end_date='{str(end)}', interval='{freq}'')")
+						self.status(f"Tried to run: ek.get_timeseries({ricsToDL}, start_date='{str(start)}', end_date='{str(end)}', interval='{interval}'')")
 
 				else:
 
 					for ric in ricsToDL:
 						try:
-							dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=freq)
+							dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=interval)
 							self.status(f"Downloaded new data for {ric} without exception")
 
 							try:
 								ricFilename = os.path.join(ric.replace('.', '-'), filename)
-								self.save_chunk(freq, ricFilename, dfRic)
+								self.save_chunk(interval, ricFilename, dfRic)
 								self.status("Saved new data without exception")
 							except Exception as e:
 								self.status(f"Couldn't save that data range: {e}")
 
 						except Exception as e:
 							self.status(f"Couldn't download that data range: {e}")
-							self.status(f"Tried to run: ek.get_timeseries('{ric}', start_date='{str(start)}', end_date='{str(end)}', interval='{freq}'')")
+							self.status(f"Tried to run: ek.get_timeseries('{ric}', start_date='{str(start)}', end_date='{str(end)}', interval='{interval}'')")
 
-	def date_to_filename(self, freq: str, start: pd.Timestamp) -> str:
+	def date_to_filename(self, interval: str, start: pd.Timestamp) -> str:
 		# TODO: Check if this potentially '@staticmethod' should be written as one.
-		gap = EIKON_REQUEST_SIZES[freq]
+		gap = EIKON_REQUEST_SIZES[interval]
 
 		if gap == "minute":
 			start = start.replace(second=0, microsecond=0)
@@ -282,8 +282,8 @@ class Database(object):
 
 		return filename
 
-	def save_chunk(self, freq: str, filename: str, df: pd.DataFrame):
-		path = os.path.join(self.location, freq, filename)
+	def save_chunk(self, interval: str, filename: str, df: pd.DataFrame):
+		path = os.path.join(self.location, interval, filename)
 		self.status(f"Saving new data to {path}")
 
 		# Make sure the folders exist for this file to be saved
@@ -321,7 +321,7 @@ class Window(ttk.Frame):
 		locFrame: ttk.Frame = self.db_location()
 		locFrame.pack(pady=10, padx=10)
 
-		eikonFrame: ttk.Frame = self.eikon_and_frequency()
+		eikonFrame: ttk.Frame = self.eikon_and_interval()
 		eikonFrame.pack(pady=10)
 
 		addRicFrame: ttk.Frame = self.new_ric_entry()
@@ -373,7 +373,7 @@ class Window(ttk.Frame):
 		self.time["text"] = "Time (UTC): " + str(now)
 		self.after(60*1000, self.update_clock)
 
-	def eikon_and_frequency(self) -> ttk.Frame:
+	def eikon_and_interval(self) -> ttk.Frame:
 		eikonFrame = ttk.Frame(self)
 
 		connLabel = ttk.Label(eikonFrame, text="Eikon status: ")
@@ -384,12 +384,12 @@ class Window(ttk.Frame):
 		self.connStatus = ttk.Label(eikonFrame, text=connText, foreground=connColor)
 		self.connStatus.pack(side="left", padx=10)
 
-		frequencyLabel = ttk.Label(eikonFrame, text="Data frequency:")
-		frequencyLabel.pack(side="left", padx=10)
+		intervalLabel = ttk.Label(eikonFrame, text="Data interval:")
+		intervalLabel.pack(side="left", padx=10)
 
-		self.frequency = tk.StringVar()
-		combobox = ttk.Combobox(eikonFrame, textvariable=self.frequency, width=8)
-		combobox['values'] = EIKON_DATA_FREQUENCIES
+		self.interval = tk.StringVar()
+		combobox = ttk.Combobox(eikonFrame, textvariable=self.interval, width=8)
+		combobox['values'] = EIKON_DATA_INTERVALS
 		combobox['state'] = 'readonly'
 		combobox.current(0)
 		combobox.pack(side="left")
@@ -459,11 +459,11 @@ class Window(ttk.Frame):
 		for i in self.table.get_children():
 			self.table.delete(i)
 
-		# Load up the range of data which is currently in the database at the current level of sampling frequency
-		freq = self.frequency.get()
-		print(f"Updating date range table for frequency {freq}")
+		# Load up the range of data which is currently in the database at the current level of sampling interval
+		interval = self.interval.get()
+		print(f"Updating date range table for interval {interval}")
 
-		self.db.load_date_ranges(freq, self.add_date_range)
+		self.db.load_date_ranges(interval, self.add_date_range)
 
 	def async_update_table(self, ignoreEvent=None):
 		thread = threading.Thread(target=self.update_table)
@@ -471,7 +471,7 @@ class Window(ttk.Frame):
 
 	def async_request_more_data(self, ignoreEvent=None):
 		def toRun():
-			self.db.download_more_data(self.frequency.get(), self.addRicEntry.get())
+			self.db.download_more_data(self.interval.get(), self.addRicEntry.get())
 			self.update_table()
 
 		thread = threading.Thread(target=toRun)
