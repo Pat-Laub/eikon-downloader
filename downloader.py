@@ -77,8 +77,7 @@ class FixedIntervalDatabase(object):
 				ric = ricName.replace('-', '.')
 				self.rics.append(ric)
 
-				self.status(f"Looking for csv's in {ricPath}")
-
+				#self.status(f"Looking for csv's in {ricPath}")
 				csvs = os.listdir(ricPath)
 				csvs = [csv for csv in csvs if csv.endswith(".csv") and not csv.startswith(".")]
 				csvs = list(sorted(csvs))
@@ -254,17 +253,22 @@ class Window(ttk.Frame):
 
 		self.pack(fill=tk.BOTH, expand=1)
 
+		self.load_database()
 
-	def setup_db_location(self):
+	def select_new_database(self):
 		# Currently the 'askdirectory' dialog fails on MacOS Monterey
 		if platform.system() != "Darwin":
 			dbPath = tk.filedialog.askdirectory(initialdir=self.locationEntry.get())
 		else:
 			dbPath = "/Users/plaub/Dropbox/Eikon/eikon-downloader/database"
 
-		self.update_status(f"Loading database at {dbPath}")
 		self.locationEntry.delete(0, tk.END)
 		self.locationEntry.insert(0, dbPath)
+
+		self.load_database()
+
+	def load_database(self):
+		self.update_status(f"Loading database at {self.locationEntry.get()}")
 		self.db = FixedIntervalDatabase(self.locationEntry.get(), self.interval.get(), self.update_status)
 		self.async_update_table()
 
@@ -282,7 +286,7 @@ class Window(ttk.Frame):
 
 		self.locationEntry.insert(0, defaultDBLocation)
 
-		updateLocationButton = ttk.Button(locFrame, text="Change", command=self.setup_db_location)
+		updateLocationButton = ttk.Button(locFrame, text="Change", command=self.select_new_database)
 		updateLocationButton.pack(side="left")
 
 		return locFrame
@@ -385,6 +389,8 @@ class Window(ttk.Frame):
 			else:
 				message = f"No data"
 				self.table.insert('', 'end', text="1", values=(ric, message))
+
+		self.update_status("Database loaded")
 
 	def async_update_table(self, ignoreEvent=None):
 		def toRun():
