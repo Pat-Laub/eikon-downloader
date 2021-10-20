@@ -29,8 +29,8 @@ try:
 	eikonLogger = logging.getLogger('pyeikon')
 	eikonLogger.setLevel(logging.FATAL)
 
-except:
-	print("Exception when trying to connect to Eikon Data API")
+except Exception as e:
+	print(f"Exception when trying to connect to Eikon Data API: {e}")
 	EIKON_CONNECTION = False
 
 from typing import Callable, Dict, List, Tuple
@@ -180,7 +180,7 @@ class Database(object):
 			elif freq == "minute": 
 				start = now - pd.Timedelta(days=366)
 			elif freq == "tick":
-				start = now - pd.Timedelta(days=7)
+				start = now - pd.Timedelta(days=90)
 
 		
 		if len(newRics) > 0:
@@ -228,21 +228,40 @@ class Database(object):
 				continue
 
 			if EIKON_CONNECTION:
-				try:
-					if end < now:
-						df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=str(end), interval=freq)
-					else:
-						df = ek.get_timeseries(ricsToDL, start_date=str(start), interval=freq)
-					self.status("Downloaded new data without exception")
-					try:
-						self.save_chunk(freq, filename, df)
-						self.status("Saved new data without exception")
-					except Exception as e:
-						self.status(f"Couldn't save that data range: {e}")
 
-				except Exception as e:
-					self.status(f"Couldn't download that data range: {e}")
-					self.status(f"Tried to run: ek.get_timeseries({ricsToDL}, start_date='{str(start)}', end_date='{str(end)}', interval='{freq}'')")
+				endDate = str(end) if end < now else None
+
+				if freq != "tick":
+					try:
+						df = ek.get_timeseries(ricsToDL, start_date=str(start), end_date=endDate, interval=freq)
+						self.status("Downloaded new data without exception")
+						try:
+							self.save_chunk(freq, filename, df)
+							self.status("Saved new data without exception")
+						except Exception as e:
+							self.status(f"Couldn't save that data range: {e}")
+
+					except Exception as e:
+						self.status(f"Couldn't download that data range: {e}")
+						self.status(f"Tried to run: ek.get_timeseries({ricsToDL}, start_date='{str(start)}', end_date='{str(end)}', interval='{freq}'')")
+
+				else:
+
+					for ric in ricsToDL:
+						try:
+							dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=freq)
+							self.status(f"Downloaded new data for {ric} without exception")
+
+							try:
+								ricFilename = os.path.join(ric.replace('.', '-'), filename)
+								self.save_chunk(freq, ricFilename, dfRic)
+								self.status("Saved new data without exception")
+							except Exception as e:
+								self.status(f"Couldn't save that data range: {e}")
+
+						except Exception as e:
+							self.status(f"Couldn't download that data range: {e}")
+							self.status(f"Tried to run: ek.get_timeseries('{ric}', start_date='{str(start)}', end_date='{str(end)}', interval='{freq}'')")
 
 	def date_to_filename(self, freq: str, start: pd.Timestamp) -> str:
 		# TODO: Check if this potentially '@staticmethod' should be written as one.
@@ -267,14 +286,15 @@ class Database(object):
 		path = os.path.join(self.location, freq, filename)
 		self.status(f"Saving new data to {path}")
 
+		# Make sure the folders exist for this file to be saved
+		os.makedirs(os.path.dirname(path), exist_ok=True)
+
 		if type(df.columns) == pd.MultiIndex:
 			df.columns = [' '.join(col).strip() for col in df.columns.values]
 		else:
-			# The 'tick' data doesn't download multiple time series for each RIC.
-			if freq != "tick":
-				self.status(f"Expected type of columns as MultiIndex but got {type(df.columns)}")
-				self.status(f"DF name: {df.columns.name}")
-				df.columns = [f"{df.columns.name} {col}" for col in df.columns]
+			self.status(f"Expected type of columns as MultiIndex but got {type(df.columns)}")
+			self.status(f"DF name: {df.columns.name}")
+			df.columns = [f"{df.columns.name} {col}" for col in df.columns]
 
 		df = df[sorted(df.columns)]
 
@@ -283,7 +303,7 @@ class Database(object):
 
 		if os.path.exists(path):
 			self.status(f"Replacing {path} data")
-			backupPath = os.path.join(self.location, freq, "." + filename)
+			backupPath = os.path.join(os.path.dirname(path), "." + os.path.basename(path))
 			shutil.move(path, backupPath)
 
 		if os.path.exists(path):
