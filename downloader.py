@@ -68,17 +68,13 @@ class FixedIntervalDatabase(object):
 		self.gap = EIKON_REQUEST_SIZES[interval]
 		self.updateCancelled = False
 
-		# Read through the subdirectories to see which RICs we already have in this database
-		self.rics: List[str] = []
-		self.dateRanges: Dict[str, Tuple[pd.Timestamp, pd.Timestamp]] = {}
-
 		os.makedirs(self.path, exist_ok=True) # Create the directory if required
 		self.load()
 
 	def load(self) -> None:
+		# Read through the subdirectories to see which RICs we already have in this database
 		self.rics: List[str] = []
-
-		self.dateRanges: Dict[str, Tuple[pd.Timestamp, pd.Timestamp]] = {}
+		self.dateRanges: Dict[str, Tuple[pd.Timestamp, pd.Timestamp, int]] = {}
 
 		subdirs = sorted(os.listdir(self.path))
 
@@ -119,9 +115,9 @@ class FixedIntervalDatabase(object):
 	def add_new_rics(self, newRics: str):
 
 		newRics = newRics.strip()
-		newRics = [] if newRics == "" else newRics.split(" ")
+		newRicList: List[str] = [] if newRics == "" else newRics.split(" ")
 
-		for ric in newRics:
+		for ric in newRicList:
 			self.rics.append(ric)
 			ricFolder = os.path.join(self.path, ric.replace('.', '-'))
 			os.makedirs(ricFolder, exist_ok=True) # Create the directory if required
@@ -187,7 +183,7 @@ class FixedIntervalDatabase(object):
 				except Exception as e:
 					self.status(f"Couldn't download that data range: {e}")
 
-					if 'code' in dir(e) and e.code == -1:
+					if type(e) == ek.eikonError.EikonError and e.code == -1:
 						# When Eikon gives us the error "No data available for the requested date range" then
 						# we can create an empty file to signify that we tried this request, and we need not try again later.
 						dfRic = pd.DataFrame()
