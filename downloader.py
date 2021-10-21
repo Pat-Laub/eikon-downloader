@@ -114,7 +114,7 @@ class FixedIntervalDatabase(object):
 
 		self.rics = list(sorted(self.rics))
 
-	def download_more_data(self):
+	def download_more_data(self, selectedRics: List[str] = []):
 		if not EIKON_CONNECTION:
 			return
 
@@ -136,18 +136,18 @@ class FixedIntervalDatabase(object):
 			endDates.append(end)
 			start = end
 
-		ricsToDL = newRics if len(newRics) > 0 else self.rics
+		ricsToDownload = selectedRics if len(selectedRics) > 0 else self.rics
 
 		for start, end in zip(startDates, endDates):
 			incomplete = pd.to_datetime("now") < end
 			filename = self.date_to_filename(start, incomplete)
 
-			if len(ricsToDL) == 1:
-				self.status(f"Requesting {ricsToDL} (type {type(ricsToDL)}) RICS to {filename} from {start} to {end} at interval '{self.interval}'")
+			if len(ricsToDownload) == 1:
+				self.status(f"Requesting RIC {ricsToDownload[0]} from {start} to {end} at interval '{self.interval}'")
 			else:
-				self.status(f"Requesting {len(ricsToDL)} RICS to {filename} from {start} to {end} at interval '{self.interval}'")
+				self.status(f"Requesting {len(ricsToDownload)} RICS from {start} to {end} at interval '{self.interval}'")
 
-			for ric in ricsToDL:
+			for ric in ricsToDownload:
 				ricFilename = os.path.join(ric.replace('.', '-'), filename)
 				ricPath = os.path.join(self.path, ricFilename)
 				if os.path.exists(ricPath) and "incomplete" not in filename:
@@ -345,6 +345,12 @@ class Window(ttk.Frame):
 		self.table.column("# 2", anchor=tk.CENTER)
 		self.table.heading("# 2", text="Date Range")
 
+		def enable_update_selected_button(event=None):
+			if len(self.table.selection()) > 0:
+				self.updateSelectedButton["state"] = tk.NORMAL
+
+		self.table.bind('<ButtonRelease-1>', enable_update_selected_button)
+
 		vsb = ttk.Scrollbar(summaryFrame, orient="vertical", command=self.table.yview)
 		vsb.pack(side='right', fill='y')
 
@@ -367,8 +373,21 @@ class Window(ttk.Frame):
 		self.time.pack()
 		self.update_clock()
 
-		updateDataButton = ttk.Button(footerFrame, text="Update data", command=self.async_request_more_data)
-		updateDataButton.pack(pady=10)
+		updateButtonsFrame = ttk.Frame(footerFrame)
+
+		def update_selected():
+			selectedRics = [self.table.item(item)['values'][0] for item in self.table.selection()]
+			print(f"{selectedRics=}")
+			self.async_request_more_data(selectedRics=selectedRics)
+
+		self.updateSelectedButton = ttk.Button(updateButtonsFrame, text="Update Selected", command=update_selected)
+		self.updateSelectedButton["state"] = tk.DISABLED
+		self.updateSelectedButton.pack(side="left")
+
+		updateAllButton = ttk.Button(updateButtonsFrame, text="Update All", command=self.async_request_more_data)
+		updateAllButton.pack(side="left")
+
+		updateButtonsFrame.pack(pady=10)
 
 		return footerFrame
 
@@ -377,7 +396,7 @@ class Window(ttk.Frame):
 		for i in self.table.get_children():
 			self.table.delete(i)
 
-		print(f"Updating date range table for interval {self.interval.get()}")
+		self.updateSelectedButton["state"] = tk.DISABLED
 
 		self.db.load()
 
@@ -400,9 +419,9 @@ class Window(ttk.Frame):
 		thread = threading.Thread(target=toRun)
 		thread.start()
 
-	def async_request_more_data(self, ignoreEvent=None):
+	def async_request_more_data(self, ignoreEvent=None, selectedRics=[]):
 		def toRun():
-			self.db.download_more_data(self.addRicEntry.get())
+			self.db.download_more_data(selectedRics)
 			self.update_table()
 
 		thread = threading.Thread(target=toRun)
