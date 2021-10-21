@@ -188,13 +188,18 @@ class FixedIntervalDatabase(object):
 					except Exception as e:
 						self.status(f"Couldn't download that data range: {e}")
 
-						if type(e) == ek.eikonError.EikonError and e.code == -1:
-							# When Eikon gives us the error "No data available for the requested date range" then
-							# we can create an empty file to signify that we tried this request, and we need not try again later.
-							dfRic = pd.DataFrame()
-							saveDF = True
-						else:
-							saveDF = False
+						if type(e) == ek.eikonError.EikonError:
+							if e.code == 429:
+								self.status(f"Hit Eikon's usage limit: {e.message}")
+								return
+
+							if e.code == -1:
+								# When Eikon gives us the error "No data available for the requested date range" then
+								# we can create an empty file to signify that we tried this request, and we need not try again later.
+								dfRic = pd.DataFrame()
+								saveDF = True
+							else:
+								saveDF = False
 
 					if saveDF:
 						break
