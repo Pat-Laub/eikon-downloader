@@ -175,21 +175,29 @@ class FixedIntervalDatabase(object):
 					continue
 
 				self.status(f"Requesting data for {ricFilename}")
-				try:
-					endDate = str(end) if end < now else None
-					dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=self.interval)
-					dfRic = dfRic.dropna(how="all")
-					saveDF = True
-				except Exception as e:
-					self.status(f"Couldn't download that data range: {e}")
+				endDate = str(end) if end < now else None
 
-					if type(e) == ek.eikonError.EikonError and e.code == -1:
-						# When Eikon gives us the error "No data available for the requested date range" then
-						# we can create an empty file to signify that we tried this request, and we need not try again later.
-						dfRic = pd.DataFrame()
+				for attempt in range(5):
+					if attempt > 0:
+						self.status(f"Attempt #{attempt+1}/5 at requesting data for {ricFilename}")
+
+					try:
+						dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=self.interval)
+						dfRic = dfRic.dropna(how="all")
 						saveDF = True
-					else:
-						saveDF = False
+					except Exception as e:
+						self.status(f"Couldn't download that data range: {e}")
+
+						if type(e) == ek.eikonError.EikonError and e.code == -1:
+							# When Eikon gives us the error "No data available for the requested date range" then
+							# we can create an empty file to signify that we tried this request, and we need not try again later.
+							dfRic = pd.DataFrame()
+							saveDF = True
+						else:
+							saveDF = False
+
+					if saveDF:
+						break
 
 				if saveDF:
 					try:
