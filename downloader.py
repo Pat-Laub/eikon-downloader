@@ -40,11 +40,23 @@ from typing import Callable, Dict, List, Tuple
 
 EIKON_DATA_INTERVALS = ("daily", "hourly", "minute", "tick")
 EIKON_REQUEST_SIZES = {
-	"daily": "year",
-	"hourly": "month",
-	"minute": "day",
-	"tick": "hour"
+	"daily": "YS", # year
+	"hourly": "MS", # month
+	"minute": "D", # day
+	"tick": "H" # hour
 }
+
+def floor_date(date: pd.Timestamp, gap: str):
+	if gap == "T": # minute
+		return date.replace(second=0, microsecond=0)
+	elif gap == "H": # hour
+		return date.replace(minute=0, second=0, microsecond=0)
+	elif gap == "D": # day
+		return date.replace(hour=0, minute=0, second=0, microsecond=0)
+	elif gap == "MS": # month
+		return date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+	elif gap == "YS": # year
+		return date.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
 class FixedIntervalDatabase(object):
 
@@ -79,40 +91,30 @@ class FixedIntervalDatabase(object):
 
 				#self.status(f"Looking for csv's in {ricPath}")
 				csvs = os.listdir(ricPath)
-				csvs = [csv for csv in csvs if csv.endswith(".csv") and not csv.startswith(".") and os.path.getsize(os.path.join(ricPath, csv)) > 0]
+				csvs = [csv for csv in csvs if csv.endswith(".csv") and not csv.startswith(".")]
 				csvs = list(sorted(csvs))
 
-				if len(csvs) > 0:
-					## The fast version is just to read the filenames to find the date ranges of the existing data
-					#firstDate = pd.to_datetime(csvs[0].split(".")[0])
-					#lastDate = pd.to_datetime(csvs[-1].split(".")[0])
+				nonEmptyCSVs = [csv for csv in csvs if os.path.getsize(os.path.join(ricPath, csv)) > 0]
 
-					firstCSV = os.path.join(ricPath, csvs[0])
+				if len(nonEmptyCSVs) > 0:
+					# The fast version is just to read the filenames to find the date ranges of the existing data
+					firstFile = pd.to_datetime(csvs[0].split(".")[0])
+					lastFile = pd.to_datetime(csvs[-1].split(".")[0])
+
+					# Calculate how many CSV 'chunks' are missing.
+					maxNumFiles = len(pd.date_range(firstFile, lastFile, freq=self.gap))
+					numMissingFiles = maxNumFiles - len(csvs)
+
+					# The more accurate version is to read into the first and last CSV files to find the real start / end datetimes.
+					firstCSV = os.path.join(ricPath, nonEmptyCSVs[0])
 					firstDF = pd.read_csv(firstCSV, parse_dates=[0], index_col=0)
 					firstDate = firstDF.index[0]
 
-					lastCSV = os.path.join(ricPath, csvs[-1])
+					lastCSV = os.path.join(ricPath, nonEmptyCSVs[-1])
 					lastDF = pd.read_csv(lastCSV, parse_dates=[0], index_col=0)
 					lastDate = lastDF.index[-1]
 
-					self.dateRanges[ric] = (firstDate, lastDate)
-
-	# TODO: Make sure 'start' is at the beginning of the relevant period.
-	# I.e. if getting daily batches of data, then make sure start is at midnight.
-	def add_time_gap(self, start: pd.Timestamp):
-		if self.gap == "minute":
-			return (start + pd.Timedelta(minutes=1)).replace(second=0, microsecond=0)
-		elif self.gap == "hour":
-			return (start + pd.Timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-		elif self.gap == "day":
-			return (start + pd.Timedelta(days=1)).replace(second=0, minute=0, hour=0, microsecond=0)
-		elif self.gap == "month":
-			if start.month < 12:
-				return dt.date(start.year, start.month + 1, 1)
-			else:
-				return dt.date(start.year + 1, 1, 1)
-		elif self.gap == "year":
-			return dt.date(start.year + 1, 1, 1)
+					self.dateRanges[ric] = (firstDate, lastDate, numMissingFiles)
 
 	def add_new_rics(self, newRics: str):
 
@@ -139,11 +141,15 @@ class FixedIntervalDatabase(object):
 		elif self.interval == "tick":
 			start = now - pd.Timedelta(days=90)
 
+		# Say if 'start' is set as 2000/1/20 and we are requesting the data
+		# month-by-month, then round down to actually start from 2000/1/1.
+		start = floor_date(start, self.gap)
+
 		# Precompute the start/end periods which will be requested; useful later for progress bars.
 		startDates = []
 		endDates = []
 		while start < now:
-			end = self.add_time_gap(start)
+			end = pd.date_range(start, periods=2, freq=self.gap)[1]
 			startDates.append(start)
 			endDates.append(end)
 			start = end
@@ -196,17 +202,13 @@ class FixedIntervalDatabase(object):
 						self.status(f"Couldn't save that data range: {e}")
 
 	def date_to_filename(self, start: pd.Timestamp, incomplete: bool) -> str:
-		if self.gap == "minute":
-			start = start.replace(second=0, microsecond=0)
+		if self.gap == "T" or self.gap == "H":
 			filename = f"{str(start).replace(':', '-')}.csv"
-		elif self.gap == "hour":
-			start = start.replace(minute=0, second=0, microsecond=0)
-			filename = f"{str(start).replace(':', '-')}.csv"
-		elif self.gap == "day":
+		elif self.gap == "D":
 			filename = f"{start.date()}.csv"
-		elif self.gap == "month":
+		elif self.gap == "MS":
 			filename = f"{start.year}-{start.month}.csv"
-		elif self.gap == "year":
+		elif self.gap == "YS":
 			filename = f"{start.year}.csv"
 
 		if incomplete:
@@ -428,7 +430,13 @@ class Window(ttk.Frame):
 		for ric in self.db.rics:
 			if ric in self.db.dateRanges.keys():
 				dates = self.db.dateRanges[ric]
-				message = f"{dates[0]} to {dates[1]}"# + "; can download {dates[1]} to {now}"
+				message = f"{dates[0]} to {dates[1]}"
+				if dates[2] > 0:
+					if dates[2] == 1:
+						message += f" (one CSV missing)"
+					else:
+						message += f" ({dates[2]} CSV's missing)"
+
 				self.table.insert('', 'end', text="1", values=(ric, message))
 			else:
 				message = f"No data"
