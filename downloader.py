@@ -79,11 +79,23 @@ class FixedIntervalDatabase(object):
 
 				#self.status(f"Looking for csv's in {ricPath}")
 				csvs = os.listdir(ricPath)
-				csvs = [csv for csv in csvs if csv.endswith(".csv") and not csv.startswith(".")]
+				csvs = [csv for csv in csvs if csv.endswith(".csv") and not csv.startswith(".") and os.path.getsize(os.path.join(ricPath, csv)) > 0]
 				csvs = list(sorted(csvs))
 
 				if len(csvs) > 0:
-					self.dateRanges[ric] = (pd.to_datetime(csvs[0].split(".")[0]), pd.to_datetime(csvs[-1].split(".")[0]))
+					## The fast version is just to read the filenames to find the date ranges of the existing data
+					#firstDate = pd.to_datetime(csvs[0].split(".")[0])
+					#lastDate = pd.to_datetime(csvs[-1].split(".")[0])
+
+					firstCSV = os.path.join(ricPath, csvs[0])
+					firstDF = pd.read_csv(firstCSV, parse_dates=[0], index_col=0)
+					firstDate = firstDF.index[0]
+
+					lastCSV = os.path.join(ricPath, csvs[-1])
+					lastDF = pd.read_csv(lastCSV, parse_dates=[0], index_col=0)
+					lastDate = lastDF.index[-1]
+
+					self.dateRanges[ric] = (firstDate, lastDate)
 
 	# TODO: Make sure 'start' is at the beginning of the relevant period.
 	# I.e. if getting daily batches of data, then make sure start is at midnight.
