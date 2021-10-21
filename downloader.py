@@ -54,7 +54,7 @@ class FixedIntervalDatabase(object):
 		self.status = status
 
 		self.gap = EIKON_REQUEST_SIZES[interval]
-
+		self.updateCancelled = False
 
 		# Read through the subdirectories to see which RICs we already have in this database
 		self.rics: List[str] = []
@@ -160,6 +160,12 @@ class FixedIntervalDatabase(object):
 				self.status(f"Requesting {len(ricsToDownload)} RICS from {start} to {end} at interval '{self.interval}'")
 
 			for ric in ricsToDownload:
+
+				if self.updateCancelled:
+					self.updateCancelled = False
+					self.status("Update cancelled")
+					return
+
 				ricFilename = os.path.join(ric.replace('.', '-'), filename)
 				ricPath = os.path.join(self.path, ricFilename)
 				if os.path.exists(ricPath) and "incomplete" not in filename:
@@ -389,15 +395,22 @@ class Window(ttk.Frame):
 
 		def update_selected():
 			selectedRics = [self.table.item(item)['values'][0] for item in self.table.selection()]
-			print(f"{selectedRics=}")
 			self.async_request_more_data(selectedRics=selectedRics)
 
 		self.updateSelectedButton = ttk.Button(updateButtonsFrame, text="Update Selected", command=update_selected)
 		self.updateSelectedButton["state"] = tk.DISABLED
 		self.updateSelectedButton.pack(side="left")
 
-		updateAllButton = ttk.Button(updateButtonsFrame, text="Update All", command=self.async_request_more_data)
-		updateAllButton.pack(side="left")
+		self.updateAllButton = ttk.Button(updateButtonsFrame, text="Update All", command=self.async_request_more_data)
+		self.updateAllButton.pack(side="left")
+
+		def cancel_update():
+			self.db.updateCancelled = True
+			self.cancelUpdateButton["state"] = tk.DISABLED
+
+		self.cancelUpdateButton = ttk.Button(updateButtonsFrame, text="Cancel Update", command=cancel_update)
+		self.cancelUpdateButton["state"] = tk.DISABLED
+		self.cancelUpdateButton.pack(side="left")
 
 		updateButtonsFrame.pack(pady=10)
 
@@ -435,6 +448,13 @@ class Window(ttk.Frame):
 		def toRun():
 			self.db.download_more_data(selectedRics)
 			self.update_table()
+			self.updateSelectedButton["state"] = tk.NORMAL
+			self.updateAllButton["state"] = tk.NORMAL
+			self.cancelUpdateButton["state"] = tk.DISABLED
+
+		self.updateSelectedButton["state"] = tk.DISABLED
+		self.updateAllButton["state"] = tk.DISABLED
+		self.cancelUpdateButton["state"] = tk.NORMAL
 
 		thread = threading.Thread(target=toRun)
 		thread.start()
