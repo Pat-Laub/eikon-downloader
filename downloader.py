@@ -102,14 +102,7 @@ class FixedIntervalDatabase(object):
 		elif self.gap == "year":
 			return dt.date(start.year + 1, 1, 1)
 
-	def download_more_data(self, newRics: str = ""):
-		if not EIKON_CONNECTION:
-			return
-
-		now = pd.to_datetime("now").replace(microsecond=0)
-
-		startDates = []
-		endDates = []
+	def add_new_rics(self, newRics: str):
 
 		newRics = newRics.strip()
 		newRics = [] if newRics == "" else newRics.split(" ")
@@ -118,38 +111,37 @@ class FixedIntervalDatabase(object):
 			self.rics.append(ric)
 			ricFolder = os.path.join(self.path, ric.replace('.', '-'))
 			os.makedirs(ricFolder, exist_ok=True) # Create the directory if required
+
 		self.rics = list(sorted(self.rics))
 
-		start = None
+	def download_more_data(self):
+		if not EIKON_CONNECTION:
+			return
 
-		if len(newRics) == 0:
-			# In this case, we're just updating existing data
-			lastObservations = [self.dateRanges[ric][1] for ric in self.dateRanges.keys()]
-
-			if len(lastObservations) > 0:
-				start = min(lastObservations)
-
-		# If we are downloading a totally new RIC, then start as far back as possible.
-		if not start:
-			if self.interval == "daily":
-				start = pd.to_datetime("1980")
-			elif self.interval == "minute":
-				start = now - pd.Timedelta(days=366)
-			elif self.interval == "tick":
-				start = now - pd.Timedelta(days=90)
+		# Set start date as far back as possible.
+		now = pd.to_datetime("now").replace(microsecond=0)
+		if self.interval == "daily":
+			start = pd.to_datetime("1980")
+		elif self.interval == "minute":
+			start = now - pd.Timedelta(days=366)
+		elif self.interval == "tick":
+			start = now - pd.Timedelta(days=90)
 
 		# Precompute the start/end periods which will be requested; useful later for progress bars.
+		startDates = []
+		endDates = []
 		while start < now:
-			startDates.append(start)
 			end = self.add_time_gap(start)
+			startDates.append(start)
 			endDates.append(end)
 			start = end
 
 		ricsToDL = newRics if len(newRics) > 0 else self.rics
 
-		for start, end in list(zip(startDates, endDates)):
+		for start, end in zip(startDates, endDates):
+			incomplete = pd.to_datetime("now") < end
+			filename = self.date_to_filename(start, incomplete)
 
-			filename = self.date_to_filename(start)
 			if len(ricsToDL) == 1:
 				self.status(f"Requesting {ricsToDL} (type {type(ricsToDL)}) RICS to {filename} from {start} to {end} at interval '{self.interval}'")
 			else:
@@ -158,7 +150,7 @@ class FixedIntervalDatabase(object):
 			for ric in ricsToDL:
 				ricFilename = os.path.join(ric.replace('.', '-'), filename)
 				ricPath = os.path.join(self.path, ricFilename)
-				if os.path.exists(ricPath):
+				if os.path.exists(ricPath) and "incomplete" not in filename:
 					self.status(f"Skipping over existing data in {ricFilename}")
 					continue
 
@@ -166,6 +158,7 @@ class FixedIntervalDatabase(object):
 				try:
 					endDate = str(end) if end < now else None
 					dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=self.interval)
+					dfRic = dfRic.dropna(how="all")
 					saveDF = True
 				except Exception as e:
 					self.status(f"Couldn't download that data range: {e}")
@@ -184,7 +177,7 @@ class FixedIntervalDatabase(object):
 					except Exception as e:
 						self.status(f"Couldn't save that data range: {e}")
 
-	def date_to_filename(self, start: pd.Timestamp) -> str:
+	def date_to_filename(self, start: pd.Timestamp, incomplete: bool) -> str:
 		if self.gap == "minute":
 			start = start.replace(second=0, microsecond=0)
 			filename = f"{str(start).replace(':', '-')}.csv"
@@ -197,6 +190,9 @@ class FixedIntervalDatabase(object):
 			filename = f"{start.year}-{start.month}.csv"
 		elif self.gap == "year":
 			filename = f"{start.year}.csv"
+
+		if incomplete:
+			filename = filename.replace(".csv", ".incomplete.csv")
 
 		return filename
 
@@ -329,8 +325,12 @@ class Window(ttk.Frame):
 		self.addRicEntry = ttk.Entry(addRicFrame, width=10)
 		self.addRicEntry.pack(side="left", padx=10)
 
-		updateDataButton = ttk.Button(addRicFrame, text="Add", command=self.async_request_more_data)
-		updateDataButton.pack(side="left")
+		def new_ric():
+			self.db.add_new_rics(self.addRicEntry.get())
+			self.load_database()
+
+		addRicButton = ttk.Button(addRicFrame, text="Add", command=new_ric)
+		addRicButton.pack(side="left")
 
 		return addRicFrame
 
