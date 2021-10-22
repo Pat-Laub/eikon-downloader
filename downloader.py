@@ -207,6 +207,10 @@ class FixedIntervalDatabase(object):
 								return
 
 							if e.code == -1:
+								if "Invalid RIC" in e.message:
+									self.status(f"RIC {ric} is invalid")
+									return
+
 								# When Eikon gives us the error "No data available for the requested date range" then
 								# we can create an empty file to signify that we tried this request, and we need not try again later.
 								dfRic = pd.DataFrame()
