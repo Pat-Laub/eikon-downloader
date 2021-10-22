@@ -33,6 +33,8 @@ except Exception as e:
 	print(f"Exception when trying to connect to Eikon Data API: {e}")
 	EIKON_CONNECTION = False
 
+import time
+
 from typing import Callable, Dict, List, Tuple
 
 # Valid intervals for Eikon are:
@@ -152,6 +154,8 @@ class FixedIntervalDatabase(object):
 
 		ricsToDownload = selectedRics if len(selectedRics) > 0 else self.rics
 
+		prevRequestTime = None
+
 		for start, end in zip(startDates, endDates):
 			incomplete = pd.to_datetime("now") < end
 			filename = self.date_to_filename(start, incomplete)
@@ -182,6 +186,15 @@ class FixedIntervalDatabase(object):
 						self.status(f"Attempt #{attempt+1}/5 at requesting data for {ricFilename}")
 
 					try:
+						now = pd.to_datetime("now")
+						if prevRequestTime is not None:
+							timeSinceLastRequest = (now - prevRequestTime).total_seconds()
+							if timeSinceLastRequest < 5:
+								print(f"About to sleep {5 - timeSinceLastRequest} secs")
+								time.sleep(5 - timeSinceLastRequest)
+
+						prevRequestTime = now
+
 						dfRic = ek.get_timeseries(ric, start_date=str(start), end_date=endDate, interval=self.interval)
 						dfRic = dfRic.dropna(how="all")
 						saveDF = True
