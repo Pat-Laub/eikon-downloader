@@ -40,10 +40,10 @@ from typing import Callable, Dict, List, Tuple
 # Valid intervals for Eikon are:
 # 'tick', 'minute', 'hour', 'daily', 'weekly', 'monthly', 'quarterly', 'yearly'.
 
-EIKON_DATA_INTERVALS = ("daily", "hourly", "minute", "tick")
+EIKON_DATA_INTERVALS = ("daily", "hour", "minute", "tick")
 EIKON_REQUEST_SIZES = {
 	"daily": "YS", # year
-	"hourly": "MS", # month
+	"hour": "MS", # month
 	"minute": "D", # day
 	"tick": "H" # hour
 }
@@ -134,7 +134,7 @@ class FixedIntervalDatabase(object):
 		now = pd.to_datetime("now").replace(microsecond=0)
 		if self.interval == "daily":
 			start = pd.to_datetime("1980")
-		elif self.interval == "minute":
+		elif self.interval == "hour" or self.interval == "minute":
 			start = now - pd.Timedelta(days=366)
 		elif self.interval == "tick":
 			start = now - pd.Timedelta(days=90)
@@ -229,7 +229,7 @@ class FixedIntervalDatabase(object):
 		elif self.gap == "D":
 			filename = f"{start.date()}.csv"
 		elif self.gap == "MS":
-			filename = f"{start.year}-{start.month}.csv"
+			filename = f"{start.year}-{start.month:02}.csv"
 		elif self.gap == "YS":
 			filename = f"{start.year}.csv"
 
