@@ -84,7 +84,7 @@ class FixedIntervalDatabase(object):
 			ricPath = os.path.join(self.path, ricName)
 
 			if os.path.isdir(ricPath):
-				ric = ricName.replace('-', '.')
+				ric = ricName
 				self.rics.append(ric)
 
 				#self.status(f"Looking for csv's in {ricPath}")
@@ -121,7 +121,7 @@ class FixedIntervalDatabase(object):
 
 		for ric in newRicList:
 			self.rics.append(ric)
-			ricFolder = os.path.join(self.path, ric.replace('.', '-'))
+			ricFolder = os.path.join(self.path, ric)
 			os.makedirs(ricFolder, exist_ok=True) # Create the directory if required
 
 		self.rics = list(sorted(self.rics))
@@ -172,7 +172,7 @@ class FixedIntervalDatabase(object):
 					self.status("Update cancelled")
 					return
 
-				ricFilename = os.path.join(ric.replace('.', '-'), filename)
+				ricFilename = os.path.join(ric, filename)
 				ricPath = os.path.join(self.path, ricFilename)
 				if os.path.exists(ricPath) and "incomplete" not in filename:
 					self.status(f"Skipping over existing data in {ricFilename}")
@@ -181,6 +181,7 @@ class FixedIntervalDatabase(object):
 				self.status(f"Requesting data for {ricFilename}")
 				endDate = str(end) if end < now else None
 
+				saveDF = False
 				for attempt in range(5):
 					if attempt > 0:
 						self.status(f"Attempt #{attempt+1}/5 at requesting data for {ricFilename}")
@@ -190,7 +191,7 @@ class FixedIntervalDatabase(object):
 						if prevRequestTime is not None:
 							timeSinceLastRequest = (now - prevRequestTime).total_seconds()
 							if timeSinceLastRequest < 5:
-								print(f"About to sleep {5 - timeSinceLastRequest} secs")
+								print(f"About to sleep {5 - timeSinceLastRequest:.2} secs")
 								time.sleep(5 - timeSinceLastRequest)
 
 						prevRequestTime = now
@@ -204,15 +205,20 @@ class FixedIntervalDatabase(object):
 						if type(e) == ek.eikonError.EikonError:
 							if e.code == 429:
 								self.status(f"Hit Eikon's usage limit: {e.message}")
-								return
+								self.status("Sleeping for half an hour..")
+								time.sleep(30*60)
 
 							if e.code == -1:
+								# Eikon gave us some error which does not represent a temporary setback (those are remedied by retrying).
+
 								if "Invalid RIC" in e.message:
 									self.status(f"RIC {ric} is invalid")
 									return
 
-								# When Eikon gives us the error "No data available for the requested date range" then
-								# we can create an empty file to signify that we tried this request, and we need not try again later.
+								# Another alternative message with this code is "The user does not have permission for the requested data".
+								# However, the most common message is "No data available for the requested date range".
+
+								# We create an empty file to signify that we tried this request, and we need not try again later.
 								dfRic = pd.DataFrame()
 								saveDF = True
 							else:
