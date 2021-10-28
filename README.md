@@ -1,4 +1,4 @@
-# Eikon time series downloader tool
+# Eikon time series downloader assistant
 
 ## Introduction
 
@@ -144,18 +144,18 @@ then the directory structure would appear as:
 >>> tree database -L 2
 database
 ├── daily
-│   ├── BTC=
-│   ├── GOOGL.O
-│   └── NVDA.O
+│   ├── RIC BTC=
+│   ├── RIC GOOGL.O
+│   └── RIC NVDA.O
 ├── hour
 ├── minute
-│   ├── AMZN.O
-│   ├── AUD=
-│   └── NVDA.O
+│   ├── RIC AMZN.O
+│   ├── RIC AUD=
+│   └── RIC NVDA.O
 └── tick
-    ├── SPOT.K
-    ├── TSLA.O
-    └── TWTR.K
+    ├── RIC SPOT.K
+    ├── RIC TSLA.O
+    └── RIC TWTR.K
 ```
 Note that the time series at the different frequencies are treated separately.
 Above, NVDA.O was downloaded at both daily and minute frequencies, though to the downloader tool this is not treated any differently.
@@ -178,19 +178,19 @@ The chunks are saved as Comma Separated Value (CSV) files, with the filenames gi
 ```console
 database
 ├── daily
-│   ├── BTC=
+│   ├── RIC BTC=
 │   │   ├── 1980.csv
 │   │   ├── 1981.csv
 │   │   ├── ...
 │   │   ├── 2020.csv
 │   │   └── 2021.incomplete.csv
-│   ├── GOOGL.O
+│   ├── RIC GOOGL.O
 │   │   ├── 1980.csv
 │   │   ├── 1981.csv
 │   │   ├── ...
 │   │   ├── 2020.csv
 │   │   └── 2021.incomplete.csv
-│   └── NVDA.O
+│   └── RIC NVDA.O
 │       ├── 1980.csv
 │       ├── 1981.csv
 │       ├── ...
@@ -198,38 +198,38 @@ database
 │       └── 2021.incomplete.csv
 ├── hour
 ├── minute
-│   ├── AMZN.O
+│   ├── RIC AMZN.O
 │   │   ├── 2020-10-22.csv
 │   │   ├── 2020-10-23.csv
 │   │   ├── ...
 │   │   ├── 2021-10-23.csv
 │   │   └── 2021-10-24.incomplete.csv
-│   ├── AUD=
+│   ├── RIC AUD=
 │   │   ├── 2020-10-22.csv
 │   │   ├── 2020-10-23.csv
 │   │   ├── ...
 │   │   ├── 2021-10-23.csv
 │   │   └── 2021-10-24.incomplete.csv
-│   └── NVDA.O
+│   └── RIC NVDA.O
 │       ├── 2020-10-21.csv
 │       ├── 2020-10-22.csv
 │       ├── ...
 │       ├── 2021-10-23.csv
 │       └── 2021-10-24.incomplete.csv
 └── tick
-    ├── SPOT.K
+    ├── RIC SPOT.K
     │   ├── 2021-07-24 04-00-00.csv
     │   ├── 2021-07-24 05-00-00.csv
     │   ├── ...
     │   ├── 2021-10-23 05-00-00.csv
     │   └── 2021-10-23 06-00-00.incomplete.csv
-    ├── TSLA.O
+    ├── RIC TSLA.O
     │   ├── 2021-07-24 04-00-00.csv
     │   ├── 2021-07-24 05-00-00.csv
     │   ├── ...
     │   ├── 2021-10-23 05-00-00.csv
     │   └── 2021-10-23 06-00-00.incomplete.csv
-    └── TWTR.K
+    └── RIC TWTR.K
         ├── 2021-07-26 07-00-00.csv
         ├── 2021-07-26 08-00-00.csv
         ├── ...

@@ -78,13 +78,14 @@ class FixedIntervalDatabase(object):
 		self.rics: List[str] = []
 		self.dateRanges: Dict[str, Tuple[pd.Timestamp, pd.Timestamp, int]] = {}
 
-		subdirs = sorted(os.listdir(self.path))
+		subDirs = sorted(os.listdir(self.path))
+		ricDirs = [dirName for dirName in subDirs if dirName.startswith("RIC ")]
 
-		for ricName in subdirs:
-			ricPath = os.path.join(self.path, ricName)
+		for ricDir in ricDirs:
+			ricPath = os.path.join(self.path, ricDir)
 
 			if os.path.isdir(ricPath):
-				ric = ricName
+				ric = ricDir.split(" ")[1]
 				self.rics.append(ric)
 
 				#self.status(f"Looking for csv's in {ricPath}")
@@ -121,7 +122,7 @@ class FixedIntervalDatabase(object):
 
 		for ric in newRicList:
 			self.rics.append(ric)
-			ricFolder = os.path.join(self.path, ric)
+			ricFolder = os.path.join(self.path, f"RIC {ric}")
 			os.makedirs(ricFolder, exist_ok=True) # Create the directory if required
 
 		self.rics = list(sorted(self.rics))
@@ -172,7 +173,7 @@ class FixedIntervalDatabase(object):
 					self.status("Update cancelled")
 					return
 
-				ricFilename = os.path.join(ric, filename)
+				ricFilename = os.path.join(f"RIC {ric}", filename)
 				ricPath = os.path.join(self.path, ricFilename)
 				if os.path.exists(ricPath) and "incomplete" not in filename:
 					self.status(f"Skipping over existing data in {ricFilename}")
