@@ -97,8 +97,9 @@ class FixedIntervalDatabase(object):
 
 				if len(nonEmptyCSVs) > 0:
 					# The fast version is just to read the filenames to find the date ranges of the existing data
-					firstFile = pd.to_datetime(csvs[0].split(".")[0])
-					lastFile = pd.to_datetime(csvs[-1].split(".")[0])
+					dateFormat = "%Y-%m-%d %H-%M-%S" if self.interval == "tick" else None
+					firstFile = pd.to_datetime(csvs[0].split(".")[0], format=dateFormat)
+					lastFile = pd.to_datetime(csvs[-1].split(".")[0], format=dateFormat)
 
 					# Calculate how many CSV 'chunks' are missing.
 					maxNumFiles = len(pd.date_range(firstFile, lastFile, freq=self.gap))
