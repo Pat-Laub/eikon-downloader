@@ -45,13 +45,13 @@ EIKON_REQUEST_SIZES = {
 	"daily": "YS", # year
 	"hour": "MS", # month
 	"minute": "D", # day
-	"tick": "0.5H" # hour
+	"tick": "0.25H" # hour
 }
 
 def floor_date(date: pd.Timestamp, gap: str):
 	if gap == "T": # minute
 		return date.replace(second=0, microsecond=0)
-	elif gap == "0.5H": # down to start of hour
+	elif gap == "0.25H": # down to start of hour
 		return date.replace(minute=0, second=0, microsecond=0)
 	elif gap == "D": # day
 		return date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -236,7 +236,7 @@ class FixedIntervalDatabase(object):
 						self.status(f"Couldn't save that data range: {e}")
 
 	def date_to_filename(self, start: pd.Timestamp, incomplete: bool) -> str:
-		if self.gap == "T" or self.gap == "0.5H":
+		if self.gap == "T" or self.gap == "0.25H":
 			filename = f"{str(start).replace(':', '-')}.csv"
 		elif self.gap == "D":
 			filename = f"{start.date()}.csv"
